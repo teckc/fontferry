@@ -43,7 +43,7 @@
         "https://github.com/teckc/fontferry/releases/latest/download/latest.json"
       ],
       "dialog": false,
-      "pubkey": "REPLACE_WITH_RELEASE_UPDATER_PUBLIC_KEY"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1M0FGMjlFQ0IyREY0MEQKUldRTjlDM0xudkk2MVpkZHU1WjlHTnhiTm5LSVFlU3ZNSytDS1cxcE9XSFE5NUg2dDg2M2IwNW0K"
     }
   }
 }
