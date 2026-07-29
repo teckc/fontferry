@@ -70,10 +70,20 @@ jobs:
       - name: Build signed updater artifacts and bundles
         shell: bash
         run: pnpm tauri build --config apps/fontferry/src-tauri/tauri.conf.json --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}"
+      - name: Index distributable bundle checksums
+        shell: bash
+        run: |
+          bundle_dir="target/${{ matrix.target }}/release/bundle"
+          find "$bundle_dir" -type f \( \
+            -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o \
+            -name '*.dmg' -o -name '*.tar.gz' -o -name '*.exe' -o \
+            -name '*.zip' -o -name '*.sig' \
+          \) -print0 | sort -z | xargs -0 sha256sum > bundle-checksums.txt
+          test -s bundle-checksums.txt
       - name: Attest bundle provenance
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
-          subject-path: target/${{ matrix.target }}/release/bundle/**/*.*
+          subject-checksums: bundle-checksums.txt
       - name: Upload bundles
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
