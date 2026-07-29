@@ -10,6 +10,7 @@
   } from "./types";
 
   type Page = "dashboard" | "catalog" | "sources" | "activity" | "settings";
+  type Theme = "system" | "light" | "dark";
 
   let page: Page = "dashboard";
   let data: Dashboard = { fonts: [], installed: [], statuses: [], activities: [] };
@@ -31,16 +32,36 @@
   let manualVersion = "";
   let updateChannel = "stable";
   let appUpdateAvailable = false;
+  let theme: Theme = "system";
 
   const navigation: { id: Page; label: string; symbol: string }[] = [
-    { id: "dashboard", label: "仪表盘", symbol: "◫" },
-    { id: "catalog", label: "字体目录", symbol: "Aa" },
-    { id: "sources", label: "新增来源", symbol: "+" },
-    { id: "activity", label: "活动中心", symbol: "↻" },
+    { id: "dashboard", label: "概览", symbol: "◫" },
+    { id: "catalog", label: "字体", symbol: "Aa" },
+    { id: "sources", label: "添加字体", symbol: "+" },
+    { id: "activity", label: "记录", symbol: "↻" },
     { id: "settings", label: "设置", symbol: "⚙" },
   ];
 
-  onMount(load);
+  onMount(() => {
+    const savedTheme = localStorage.getItem("fontferry-theme");
+    if (savedTheme === "light" || savedTheme === "dark") theme = savedTheme;
+    applyTheme();
+    void load();
+  });
+
+  function applyTheme() {
+    if (theme === "system") {
+      document.documentElement.removeAttribute("data-theme");
+      localStorage.removeItem("fontferry-theme");
+    } else {
+      document.documentElement.dataset.theme = theme;
+      localStorage.setItem("fontferry-theme", theme);
+    }
+  }
+
+  function changeTheme() {
+    applyTheme();
+  }
 
   async function load() {
     loading = true;
@@ -90,6 +111,30 @@
     }
   }
 
+  async function checkAllUpdates() {
+    checking = true;
+    error = "";
+    message = "正在检查字体更新…";
+    try {
+      const result = await invoke<{ statuses: UpdateStatus[]; failures: number }>(
+        "check_updates",
+      );
+      const refreshedIds = new Set(result.statuses.map((item) => item.fontId));
+      data.statuses = [
+        ...data.statuses.filter((item) => !refreshedIds.has(item.fontId)),
+        ...result.statuses,
+      ];
+      message = result.failures
+        ? `检查完成；${result.failures} 个来源暂时无法连接，已保留原有结果`
+        : "字体更新检查完成";
+    } catch (cause) {
+      error = String(cause);
+      message = "";
+    } finally {
+      checking = false;
+    }
+  }
+
   async function install(font: FontDefinition) {
     error = "";
     message = "正在下载并验证…";
@@ -111,7 +156,7 @@
   }
 
   async function remove(font: FontDefinition) {
-    if (!window.confirm(`卸载 FontFerry 管理的 ${font.name} 文件？`)) return;
+    if (!window.confirm(`卸载由字渡安装的 ${font.name}？`)) return;
     try {
       await invoke("uninstall_font", { fontId: font.id });
       selected = null;
@@ -139,7 +184,7 @@
     const definition: FontDefinition = {
       id: sourceId.trim(),
       name: sourceName.trim(),
-      description: "用户添加的本地未签名来源",
+      description: "用户添加的字体",
       homepage,
       license: {
         name: "用户确认的上游许可证",
@@ -162,8 +207,8 @@
         : [
             {
               id: "default",
-              name: "默认",
-              description: "匹配一个 Release 资产",
+              name: "默认文件",
+              description: "使用符合下载文件匹配规则的文件",
               assetPattern: sourceAssetPattern,
               default: true,
             },
@@ -172,7 +217,7 @@
     };
     try {
       await invoke("save_source", { definition });
-      message = "来源已保存，重启 FontFerry 后载入";
+      message = "字体已保存，重启字渡后即可看到";
     } catch (cause) {
       error = String(cause);
     }
@@ -194,7 +239,7 @@
         fontId: font.id,
         version: manualVersion || null,
       });
-      message = "本地版本修正已保存";
+      message = "已保存当前版本";
       await check(font.id);
     } catch (cause) {
       error = String(cause);
@@ -208,8 +253,8 @@
         { channel: updateChannel },
       );
       message = update.available
-        ? `FontFerry ${update.version} 可用`
-        : "FontFerry 已是当前通道的最新版本";
+        ? `字渡 ${update.version} 可用`
+        : "字渡已是当前更新通道的最新版本";
       appUpdateAvailable = update.available;
     } catch (cause) {
       error = String(cause);
@@ -218,12 +263,12 @@
 
   async function installAppUpdate() {
     try {
-      message = "正在下载并验证程序更新…";
+      message = "正在下载程序更新…";
       const installed = await invoke<boolean>("install_app_update", {
         channel: updateChannel,
       });
       message = installed
-        ? "更新安装已启动；请按系统提示完成或重新启动 FontFerry"
+        ? "更新已开始安装；请按系统提示完成或重新启动字渡"
         : "没有可安装的程序更新";
     } catch (cause) {
       error = String(cause);
@@ -263,7 +308,7 @@
   <aside>
     <div class="brand">
       <div class="brandmark">F</div>
-      <div><strong>FontFerry</strong><small>字体渡口</small></div>
+      <div><strong>FontFerry</strong><small>字渡</small></div>
     </div>
     <nav aria-label="主导航">
       {#each navigation as item}
@@ -273,19 +318,16 @@
         </button>
       {/each}
     </nav>
-    <div class="trust">
-      <span class="dot"></span>
-      <div><strong>内置目录</strong><small>本地签名基线</small></div>
-    </div>
   </aside>
 
   <main>
     <header>
       <div>
-        <p class="eyebrow">FONT OPERATIONS</p>
         <h1>{navigation.find((item) => item.id === page)?.label}</h1>
       </div>
-      <button class="quiet" onclick={load} disabled={loading}>↻ 刷新</button>
+      <button class="primary" onclick={checkAllUpdates} disabled={checking}>
+        {checking ? "正在检查…" : "检查字体更新"}
+      </button>
     </header>
 
     {#if error}
@@ -299,28 +341,28 @@
       <section class="loading"><div></div><p>正在读取字体状态…</p></section>
     {:else if page === "dashboard"}
       <section class="metrics">
-        <article><small>已管理字体</small><strong>{data.installed.length}</strong><p>仅包含 FontFerry 所有文件</p></article>
-        <article class="accent"><small>可自动更新</small><strong>{autoCount}</strong><p>许可证已确认的公开制品</p></article>
-        <article><small>仅提醒</small><strong>{reminderCount}</strong><p>商业或无公开下载渠道</p></article>
-        <article><small>目录字体</small><strong>{data.fonts.length}</strong><p>内置与本地来源</p></article>
+        <article><small>已安装</small><strong>{data.installed.length}</strong><p>由字渡安装的字体</p></article>
+        <article class="accent"><small>可直接更新</small><strong>{autoCount}</strong><p>字渡可以下载并安装</p></article>
+        <article><small>需要手动更新</small><strong>{reminderCount}</strong><p>商业字体或没有公开下载</p></article>
+        <article><small>可选字体</small><strong>{data.fonts.length}</strong><p>字渡目前支持的字体</p></article>
       </section>
       <section class="panel">
-        <div class="panel-title"><div><h2>需要关注</h2><p>可更新、仅提醒和最近失败集中显示</p></div></div>
+        <div class="panel-title"><div><h2>可用更新</h2><p>有新版本的字体会显示在这里</p></div></div>
         <div class="rows">
           {#each data.statuses.filter((item) => item.updateAvailable) as item}
             {@const font = data.fonts.find((candidate) => candidate.id === item.fontId)}
             {#if font}
               <button class="font-row" onclick={() => openFont(font)}>
                 <span class="font-avatar">{font.name.slice(0, 1)}</span>
-                <span class="grow"><strong>{font.name}</strong><small>{item.currentVersion ?? "未纳管"} → {item.availableVersion}</small></span>
+                <span class="grow"><strong>{font.name}</strong><small>{item.currentVersion ?? "未安装"} → {item.availableVersion}</small></span>
                 <span class:reminder={item.deliveryPolicy === "notifyOnly"} class="pill">
-                  {item.deliveryPolicy === "autoInstall" ? "可更新" : "仅提醒"}
+                  {item.deliveryPolicy === "autoInstall" ? "可直接更新" : "手动更新"}
                 </span>
                 <span>›</span>
               </button>
             {/if}
           {:else}
-            <div class="empty">暂无已知更新。点击“刷新”重新读取本地状态。</div>
+            <div class="empty">暂时没有可用更新。点击右上角按钮可重新检查。</div>
           {/each}
         </div>
       </section>
@@ -328,9 +370,9 @@
       <section class="toolbar">
         <input aria-label="搜索字体" bind:value={query} placeholder="搜索字体、ID 或描述…" />
         <select aria-label="更新方式" bind:value={policy}>
-          <option value="all">全部交付方式</option>
-          <option value="autoInstall">可自动安装</option>
-          <option value="notifyOnly">仅提醒</option>
+          <option value="all">全部更新方式</option>
+          <option value="autoInstall">可直接更新</option>
+          <option value="notifyOnly">需要手动更新</option>
         </select>
       </section>
       <section class="catalog-grid">
@@ -341,14 +383,14 @@
             <div class="card-top">
               <span class="font-avatar large">{font.name.slice(0, 1)}</span>
               <span class:reminder={font.deliveryPolicy === "notifyOnly"} class="pill">
-                {font.deliveryPolicy === "autoInstall" ? "自动安装" : "仅提醒"}
+                {font.deliveryPolicy === "autoInstall" ? "可直接更新" : "手动更新"}
               </span>
             </div>
             <h2>{font.name}</h2>
             <code>{font.id}</code>
             <p>{font.description}</p>
             <footer>
-              <span>{current ? `已安装 ${current.version}` : "未由 FontFerry 管理"}</span>
+              <span>{current ? `已安装 ${current.version}` : "未安装"}</span>
               {#if update?.updateAvailable}<strong>有更新</strong>{/if}
             </footer>
           </button>
@@ -357,39 +399,39 @@
     {:else if page === "sources"}
       <section class="split">
         <article class="panel form">
-          <div class="panel-title"><div><h2>新增本地来源</h2><p>来源只保存在本机 SQLite，明确标记为未签名</p></div><span class="pill reminder">未签名</span></div>
-          <label>来源类型
+          <div class="panel-title"><div><h2>添加字体</h2><p>保存到这台电脑，不会上传</p></div><span class="pill reminder">自定义</span></div>
+          <label>检查方式
             <select bind:value={sourceKind}>
-              <option value="github">GitHub Release + 资产</option>
-              <option value="metadata">网页 HTTP 指纹（仅提醒）</option>
+              <option value="github">GitHub Releases</option>
+              <option value="metadata">检查网页是否变化（只提醒）</option>
             </select>
           </label>
           <div class="field-pair">
-            <label>ID<input bind:value={sourceId} placeholder="my-font" /></label>
-            <label>显示名称<input bind:value={sourceName} placeholder="My Font" /></label>
+            <label>唯一名称<input bind:value={sourceId} placeholder="my-font" /></label>
+            <label>字体名称<input bind:value={sourceName} placeholder="My Font" /></label>
           </div>
           {#if sourceKind === "github"}
             <label>GitHub 仓库<input bind:value={sourceRepository} placeholder="owner/repository" /></label>
-            <label>资产匹配正则<input bind:value={sourceAssetPattern} /></label>
+            <label>下载文件匹配规则（高级）<input bind:value={sourceAssetPattern} /></label>
           {:else}
             <label>公开 HTTPS 地址<input bind:value={sourceHomepage} placeholder="https://example.com/font/" /></label>
           {/if}
-          <button class="primary" onclick={saveSource} disabled={!sourceId || !sourceName}>验证并保存</button>
+          <button class="primary" onclick={saveSource} disabled={!sourceId || !sourceName}>检查并保存</button>
         </article>
         <article class="panel guidance">
-          <h2>安全边界</h2>
+          <h2>添加前请确认</h2>
           <ul>
-            <li>只接受声明式版本与资产规则，不执行任意脚本。</li>
-            <li>下载必须使用公开 HTTPS，拒绝本机和私有网络地址。</li>
-            <li>一个变体必须恰好匹配一个 Release 资产。</li>
-            <li>压缩包受路径、符号链接、体积和条目数限制。</li>
+            <li>下载地址必须是公开的 HTTPS 地址。</li>
+            <li>字渡不会运行字体仓库中的脚本。</li>
+            <li>每个选项只应匹配一个下载文件。</li>
+            <li>请确认字体许可证允许你的使用方式。</li>
           </ul>
-          <p>保存前程序会验证 schema 和正则；正式目录由独立 Ed25519 密钥签名。</p>
+          <p>保存后，字渡会像检查内置字体一样检查这个字体。</p>
         </article>
       </section>
     {:else if page === "activity"}
       <section class="panel">
-        <div class="panel-title"><div><h2>操作与通知</h2><p>本地日志不包含 URL 查询参数和敏感路径</p></div></div>
+        <div class="panel-title"><div><h2>最近记录</h2><p>查看安装、更新和错误信息</p></div></div>
         <div class="timeline">
           {#each data.activities as item}
             <div class="event">
@@ -398,7 +440,7 @@
               <time>{new Date(item.createdAt).toLocaleString()}</time>
             </div>
           {:else}
-            <div class="empty">尚无活动记录。</div>
+            <div class="empty">还没有记录。</div>
           {/each}
         </div>
       </section>
@@ -406,23 +448,33 @@
       <section class="settings">
         <article class="panel">
           <h2>每日检查</h2>
-          <label class="switch-row"><span><strong>启用系统计划任务</strong><small>每天检查；Linux 无 systemd 时在应用启动补检</small></span><input type="checkbox" bind:checked={scheduleEnabled} /></label>
-          <button class="primary" onclick={setSchedule}>应用计划</button>
+          <label class="switch-row"><span><strong>每天自动检查字体更新</strong><small>即使字渡没有打开，也会按时检查</small></span><input type="checkbox" bind:checked={scheduleEnabled} /></label>
+          <button class="primary" onclick={setSchedule}>保存</button>
         </article>
         <article class="panel">
           <h2>程序更新</h2>
-          <div class="setting-row"><span><strong>更新通道</strong><small>稳定版使用 latest.json，测试版使用 beta 清单</small></span><select bind:value={updateChannel}><option value="stable">稳定</option><option value="beta">测试</option></select></div>
+          <div class="setting-row"><span><strong>更新通道</strong><small>稳定版更可靠；测试版可以提前体验新功能</small></span><select bind:value={updateChannel}><option value="stable">稳定版</option><option value="beta">测试版</option></select></div>
           <button class="primary" onclick={checkAppUpdate}>检查程序更新</button>
           {#if appUpdateAvailable}
-            <button class="quiet" onclick={installAppUpdate}>下载并安装已签名更新</button>
+            <button class="quiet" onclick={installAppUpdate}>安装更新</button>
           {/if}
-          <p class="muted">AppImage 支持自动更新；deb/rpm 仅提醒并交给系统包管理器。</p>
+          <p class="muted">通过系统软件商店安装的版本，请在系统中更新。</p>
         </article>
         <article class="panel">
-          <h2>目录信任</h2>
-          <div class="setting-row"><span><strong>内置目录</strong><small>builtin-2026-07-29</small></span><span class="pill">可用</span></div>
-          <div class="setting-row"><span><strong>远程签名目录</strong><small>验签失败时使用最后成功缓存</small></span><span class="pill reminder">待配置密钥</span></div>
-          <button class="quiet" onclick={refreshCatalog}>刷新并验签目录</button>
+          <h2>字体列表</h2>
+          <div class="setting-row"><span><strong>内置字体</strong><small>随字渡提供，离线也可查看</small></span><span class="pill">可用</span></div>
+          <div class="setting-row"><span><strong>在线字体列表</strong><small>更新失败时继续使用上次保存的内容</small></span></div>
+          <button class="quiet" onclick={refreshCatalog}>更新字体列表</button>
+        </article>
+        <article class="panel">
+          <h2>外观</h2>
+          <div class="setting-row"><span><strong>颜色模式</strong><small>浅色使用米白色，深色使用灰黑色</small></span>
+            <select bind:value={theme} onchange={changeTheme}>
+              <option value="system">跟随系统</option>
+              <option value="light">浅色</option>
+              <option value="dark">深色</option>
+            </select>
+          </div>
         </article>
       </section>
     {/if}
@@ -437,13 +489,14 @@
       <h1>{selected.name}</h1>
       <p class="lead">{selected.description}</p>
       <div class="detail-grid">
-        <div><small>当前版本</small><strong>{installed(selected.id)?.version ?? "未纳管"}</strong></div>
+        <div><small>当前版本</small><strong>{installed(selected.id)?.version ?? "未安装"}</strong></div>
         <div><small>最新版本</small><strong>{status(selected.id)?.availableVersion ?? "尚未检查"}</strong></div>
-        <div><small>交付策略</small><strong>{selected.deliveryPolicy === "autoInstall" ? "可自动安装" : "仅提醒"}</strong></div>
+        <div><small>更新方式</small><strong>{selected.deliveryPolicy === "autoInstall" ? "字渡可安装" : "只提醒"}</strong></div>
         <div><small>许可证</small><strong>{selected.license.spdx ?? "商业/自定义"}</strong></div>
       </div>
       {#if selected.variants.length}
-        <h3>选择变体</h3>
+        <h3>选择字体包</h3>
+        <p class="muted">名称来自字体作者。通常只需选择一个；多个包可能包含同名字体。</p>
         <div class="variants">
           {#each selected.variants as variant}
             <label class:selected={selectedVariants.includes(variant.id)}>
@@ -453,25 +506,25 @@
           {/each}
         </div>
       {/if}
-      <div class="license-line"><span>许可证修订：{selected.license.revision}</span><a href={selected.license.url} target="_blank" rel="noreferrer">查看许可证 ↗</a></div>
+      <div class="license-line"><span>许可协议：{selected.license.name}</span><a href={selected.license.url} target="_blank" rel="noreferrer">查看许可协议 ↗</a></div>
       {#if selected.deliveryPolicy === "notifyOnly"}
         <div class="manual-version">
-          <label>本地版本修正<input bind:value={manualVersion} placeholder="例如 7.2.0" /></label>
+          <label>当前安装版本<input bind:value={manualVersion} placeholder="例如 7.2.0" /></label>
           <button class="quiet" onclick={() => saveManualVersion(selected!)}>保存</button>
         </div>
       {/if}
       <div class="drawer-actions">
         <button class="quiet" onclick={() => check(selected!.id)} disabled={checking}>{checking ? "检查中…" : "检查更新"}</button>
         {#if selected.deliveryPolicy === "autoInstall"}
-          <button class="primary" onclick={() => install(selected!)} disabled={!selectedVariants.length}>安装 / 更新</button>
+          <button class="primary" onclick={() => install(selected!)} disabled={!selectedVariants.length}>安装或更新</button>
         {:else}
           <a class="primary link" href={selected.homepage} target="_blank" rel="noreferrer">前往官方渠道</a>
         {/if}
       </div>
       {#if installed(selected.id)}
         <div class="danger-zone">
-          {#if installed(selected.id)?.previous}<button onclick={() => rollback(selected!)}>回滚到上一版本</button>{/if}
-          <button onclick={() => remove(selected!)}>卸载已管理文件</button>
+          {#if installed(selected.id)?.previous}<button onclick={() => rollback(selected!)}>恢复上一版本</button>{/if}
+          <button onclick={() => remove(selected!)}>卸载</button>
         </div>
       {/if}
     </div>

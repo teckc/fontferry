@@ -14,7 +14,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 test("renders the primary navigation", async () => {
   render(App);
-  expect(await screen.findByText("字体目录")).toBeInTheDocument();
-  expect(screen.getByText("新增来源")).toBeInTheDocument();
-  expect(screen.getByText("活动中心")).toBeInTheDocument();
+  expect(await screen.findByText("字体")).toBeInTheDocument();
+  expect(screen.getByText("添加字体")).toBeInTheDocument();
+  expect(screen.getByText("记录")).toBeInTheDocument();
 });

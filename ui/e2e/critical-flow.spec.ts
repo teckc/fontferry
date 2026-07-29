@@ -21,17 +21,17 @@ const dashboard = {
       versionPolicy: {},
       variants: [
         {
-          id: "nf-cn",
-          name: "Nerd Font 中文版",
-          description: "含中文和图标",
+          id: "maplemono-nf-cn",
+          name: "MapleMono-NF-CN",
+          description: "上游原始文件名",
           assetPattern: "^MapleMono-NF-CN\\.zip$",
           default: true,
         },
         {
-          id: "nl",
-          name: "无连字",
-          description: "关闭连字",
-          assetPattern: "^MapleMonoNL\\.zip$",
+          id: "maplemononl-nf-cn",
+          name: "MapleMonoNL-NF-CN",
+          description: "上游原始文件名",
+          assetPattern: "^MapleMonoNL-NF-CN\\.zip$",
           default: false,
         },
       ],
@@ -66,15 +66,18 @@ test.beforeEach(async ({ page }) => {
 
 test("opens the catalog and lets the user choose variants", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "仪表盘" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "概览" })).toBeVisible();
 
-  await page.getByRole("button", { name: /字体目录/ }).click();
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: /Aa\s*字体/ })
+    .click();
   await expect(page.getByText("Maple Mono", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /Maple Mono/ }).click();
 
   const dialog = page.getByRole("dialog", { name: "Maple Mono" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByLabel("Nerd Font 中文版")).toBeChecked();
-  await dialog.getByLabel("无连字").check();
-  await expect(dialog.getByLabel("无连字")).toBeChecked();
+  await expect(dialog.getByLabel("MapleMono-NF-CN")).toBeChecked();
+  await dialog.getByLabel("MapleMonoNL-NF-CN").check();
+  await expect(dialog.getByLabel("MapleMonoNL-NF-CN")).toBeChecked();
 });

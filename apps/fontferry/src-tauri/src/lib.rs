@@ -11,6 +11,7 @@ use fontferry_platform::{
     SafeFontPreparer, SqliteState, install_daily_schedule, load_embedded_or_cached,
     refresh_signed_catalog, remove_daily_schedule, scan_font_awesome,
 };
+use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
 use tauri_plugin_updater::UpdaterExt;
@@ -113,6 +114,13 @@ struct AppUpdate {
     notes: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateCheckResult {
+    statuses: Vec<UpdateStatus>,
+    failures: usize,
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
     if let Some(command) = cli.command {
@@ -213,7 +221,9 @@ async fn run_cli(command: CliCommand) -> Result<()> {
                 if arguments.headless {
                     let _notification_result = notify_rust::Notification::new()
                         .summary("FontFerry 更新失败")
-                        .body(&format!("{failures} 个更新操作失败，请打开活动中心查看"))
+                        .body(&format!(
+                            "{failures} 个更新操作失败，请打开字渡的“记录”查看"
+                        ))
                         .appname("FontFerry")
                         .show();
                 }
@@ -256,6 +266,7 @@ fn run_gui() -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             dashboard,
             check_font,
+            check_updates,
             install_font,
             uninstall_font,
             rollback_font,
@@ -363,11 +374,7 @@ async fn dashboard(state: State<'_, AppState>) -> std::result::Result<Dashboard,
         .list_installed()
         .await
         .map_err(|error| error.to_string())?;
-    let statuses = check_all(&state.engine)
-        .await
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-        .collect();
+    let statuses = cached_statuses(&state);
     let activities = state
         .state
         .list_activity(100)
@@ -385,11 +392,68 @@ async fn check_font(
     font_id: String,
     state: State<'_, AppState>,
 ) -> std::result::Result<UpdateStatus, String> {
-    state
+    let status = state
         .engine
         .check_font(&font_id)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    cache_status(&state.state, &status).map_err(|error| error.to_string())?;
+    Ok(status)
+}
+
+#[tauri::command]
+async fn check_updates(
+    state: State<'_, AppState>,
+) -> std::result::Result<UpdateCheckResult, String> {
+    let font_ids = state
+        .engine
+        .fonts()
+        .into_iter()
+        .map(|font| font.id)
+        .collect::<Vec<_>>();
+    let checks = font_ids
+        .iter()
+        .map(|font_id| state.engine.check_font(font_id));
+    let results = join_all(checks).await;
+    let mut statuses = Vec::new();
+    let mut failures = 0;
+    for result in results {
+        match result {
+            Ok(status) => {
+                cache_status(&state.state, &status).map_err(|error| error.to_string())?;
+                statuses.push(status);
+            }
+            Err(error) => {
+                failures += 1;
+                tracing::warn!(error = %error, "font update check failed");
+            }
+        }
+    }
+    Ok(UpdateCheckResult { statuses, failures })
+}
+
+fn status_cache_key(font_id: &str) -> String {
+    format!("update-status:{font_id}")
+}
+
+fn cache_status(state: &SqliteState, status: &UpdateStatus) -> Result<()> {
+    state.set_setting(&status_cache_key(&status.font_id), status)?;
+    Ok(())
+}
+
+fn cached_statuses(state: &AppState) -> Vec<UpdateStatus> {
+    state
+        .engine
+        .fonts()
+        .into_iter()
+        .filter_map(|font| {
+            state
+                .state
+                .get_setting::<UpdateStatus>(&status_cache_key(&font.id))
+                .ok()
+                .flatten()
+        })
+        .collect()
 }
 
 #[tauri::command]

@@ -6,7 +6,7 @@
     {
       "id": "maple-mono",
       "name": "Maple Mono",
-      "description": "圆角等宽字体，提供中文、Nerd Font、无连字等多种构建。",
+      "description": "圆角等宽字体，作者提供中文、Nerd Font、无连字等多种字体包。",
       "homepage": "https://github.com/subframe7536/maple-font",
       "license": {
         "name": "SIL Open Font License 1.1",
@@ -28,41 +28,57 @@
       "deliveryPolicy": "autoInstall",
       "versionPolicy": {},
       "variants": [
-        {
-          "id": "nf-cn",
-          "name": "Nerd Font 中文版",
-          "description": "含 Nerd Font 图标与中文字符，默认连字。",
-          "assetPattern": "^MapleMono-NF-CN\\.zip$",
-          "default": true
-        },
-        {
-          "id": "nf-cn-unhinted",
-          "name": "Nerd Font 中文无 Hint",
-          "description": "中文 Nerd Font，无 Hint。",
-          "assetPattern": "^MapleMono-NF-CN-unhinted\\.zip$",
-          "default": false
-        },
-        {
-          "id": "nl-nf-cn",
-          "name": "无连字 Nerd Font 中文版",
-          "description": "关闭连字，含 Nerd Font 图标和中文字符。",
-          "assetPattern": "^MapleMonoNL-NF-CN\\.zip$",
-          "default": false
-        },
-        {
-          "id": "ttf",
-          "name": "标准 TTF",
-          "description": "不含 Nerd Font 与中文扩展的标准 TTF。",
-          "assetPattern": "^MapleMono-TTF\\.zip$",
-          "default": false
-        }
+        { "id": "maplemono-cn-unhinted", "name": "MapleMono-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMono-CN-unhinted\\.zip$", "default": false },
+        { "id": "maplemono-cn", "name": "MapleMono-CN", "description": "上游原始文件名", "assetPattern": "^MapleMono-CN\\.zip$", "default": false },
+        { "id": "maplemono-nf-cn-unhinted", "name": "MapleMono-NF-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMono-NF-CN-unhinted\\.zip$", "default": false },
+        { "id": "maplemono-nf-cn", "name": "MapleMono-NF-CN", "description": "上游原始文件名", "assetPattern": "^MapleMono-NF-CN\\.zip$", "default": true },
+        { "id": "maplemono-nf-unhinted", "name": "MapleMono-NF-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMono-NF-unhinted\\.zip$", "default": false },
+        { "id": "maplemono-nf", "name": "MapleMono-NF", "description": "上游原始文件名", "assetPattern": "^MapleMono-NF\\.zip$", "default": false },
+        { "id": "maplemono-otf", "name": "MapleMono-OTF", "description": "上游原始文件名", "assetPattern": "^MapleMono-OTF\\.zip$", "default": false },
+        { "id": "maplemono-ttf-autohint", "name": "MapleMono-TTF-AutoHint", "description": "上游原始文件名", "assetPattern": "^MapleMono-TTF-AutoHint\\.zip$", "default": false },
+        { "id": "maplemono-ttf", "name": "MapleMono-TTF", "description": "上游原始文件名", "assetPattern": "^MapleMono-TTF\\.zip$", "default": false },
+        { "id": "maplemono-variable", "name": "MapleMono-Variable", "description": "上游原始文件名", "assetPattern": "^MapleMono-Variable\\.zip$", "default": false },
+        { "id": "maplemono-woff2", "name": "MapleMono-Woff2", "description": "上游原始文件名", "assetPattern": "^MapleMono-Woff2\\.zip$", "default": false },
+        { "id": "maplemononl-cn-unhinted", "name": "MapleMonoNL-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-CN-unhinted\\.zip$", "default": false },
+        { "id": "maplemononl-cn", "name": "MapleMonoNL-CN", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-CN\\.zip$", "default": false },
+        { "id": "maplemononl-nf-cn-unhinted", "name": "MapleMonoNL-NF-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-NF-CN-unhinted\\.zip$", "default": false },
+        { "id": "maplemononl-nf-cn", "name": "MapleMonoNL-NF-CN", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-NF-CN\\.zip$", "default": false },
+        { "id": "maplemononl-nf-unhinted", "name": "MapleMonoNL-NF-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-NF-unhinted\\.zip$", "default": false },
+        { "id": "maplemononl-nf", "name": "MapleMonoNL-NF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-NF\\.zip$", "default": false },
+        { "id": "maplemononl-otf", "name": "MapleMonoNL-OTF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-OTF\\.zip$", "default": false },
+        { "id": "maplemononl-ttf-autohint", "name": "MapleMonoNL-TTF-AutoHint", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-TTF-AutoHint\\.zip$", "default": false },
+        { "id": "maplemononl-ttf", "name": "MapleMonoNL-TTF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-TTF\\.zip$", "default": false },
+        { "id": "maplemononl-variable", "name": "MapleMonoNL-Variable", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-Variable\\.zip$", "default": false },
+        { "id": "maplemononl-woff2", "name": "MapleMonoNL-Woff2", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-Woff2\\.zip$", "default": false },
+        { "id": "maplemononormal-cn-unhinted", "name": "MapleMonoNormal-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-CN-unhinted\\.zip$", "default": false },
+        { "id": "maplemononormal-cn", "name": "MapleMonoNormal-CN", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-CN\\.zip$", "default": false },
+        { "id": "maplemononormal-nf-cn-unhinted", "name": "MapleMonoNormal-NF-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-NF-CN-unhinted\\.zip$", "default": false },
+        { "id": "maplemononormal-nf-cn", "name": "MapleMonoNormal-NF-CN", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-NF-CN\\.zip$", "default": false },
+        { "id": "maplemononormal-nf-unhinted", "name": "MapleMonoNormal-NF-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-NF-unhinted\\.zip$", "default": false },
+        { "id": "maplemononormal-nf", "name": "MapleMonoNormal-NF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-NF\\.zip$", "default": false },
+        { "id": "maplemononormal-otf", "name": "MapleMonoNormal-OTF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-OTF\\.zip$", "default": false },
+        { "id": "maplemononormal-ttf-autohint", "name": "MapleMonoNormal-TTF-AutoHint", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-TTF-AutoHint\\.zip$", "default": false },
+        { "id": "maplemononormal-ttf", "name": "MapleMonoNormal-TTF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-TTF\\.zip$", "default": false },
+        { "id": "maplemononormal-variable", "name": "MapleMonoNormal-Variable", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-Variable\\.zip$", "default": false },
+        { "id": "maplemononormal-woff2", "name": "MapleMonoNormal-Woff2", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-Woff2\\.zip$", "default": false },
+        { "id": "maplemononormalnl-cn-unhinted", "name": "MapleMonoNormalNL-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-CN-unhinted\\.zip$", "default": false },
+        { "id": "maplemononormalnl-cn", "name": "MapleMonoNormalNL-CN", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-CN\\.zip$", "default": false },
+        { "id": "maplemononormalnl-nf-cn-unhinted", "name": "MapleMonoNormalNL-NF-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-NF-CN-unhinted\\.zip$", "default": false },
+        { "id": "maplemononormalnl-nf-cn", "name": "MapleMonoNormalNL-NF-CN", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-NF-CN\\.zip$", "default": false },
+        { "id": "maplemononormalnl-nf-unhinted", "name": "MapleMonoNormalNL-NF-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-NF-unhinted\\.zip$", "default": false },
+        { "id": "maplemononormalnl-nf", "name": "MapleMonoNormalNL-NF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-NF\\.zip$", "default": false },
+        { "id": "maplemononormalnl-otf", "name": "MapleMonoNormalNL-OTF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-OTF\\.zip$", "default": false },
+        { "id": "maplemononormalnl-ttf-autohint", "name": "MapleMonoNormalNL-TTF-AutoHint", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-TTF-AutoHint\\.zip$", "default": false },
+        { "id": "maplemononormalnl-ttf", "name": "MapleMonoNormalNL-TTF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-TTF\\.zip$", "default": false },
+        { "id": "maplemononormalnl-variable", "name": "MapleMonoNormalNL-Variable", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-Variable\\.zip$", "default": false },
+        { "id": "maplemononormalnl-woff2", "name": "MapleMonoNormalNL-Woff2", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-Woff2\\.zip$", "default": false }
       ],
       "platforms": ["windows", "macos", "linux"]
     },
     {
       "id": "zhuque-fangsong",
       "name": "朱雀仿宋",
-      "description": "开源仿宋字体；上游目前以 GitHub 预发布形式发布。",
+      "description": "开源仿宋字体；目前的新版本会标记为测试版。",
       "homepage": "https://github.com/TrionesType/zhuque",
       "license": {
         "name": "SIL Open Font License 1.1",
@@ -307,7 +323,7 @@
     {
       "id": "font-awesome-pro",
       "name": "Font Awesome Pro",
-      "description": "使用官方公开发布 API 检查版本；仅提醒，不接触账号、Token 或 Pro 文件。",
+      "description": "检查官网公布的新版本。Pro 字体需要你自行从官网下载，字渡只提醒。",
       "homepage": "https://fontawesome.com/",
       "license": {
         "name": "Font Awesome Pro Commercial License",
@@ -330,7 +346,7 @@
     {
       "id": "mi-sans",
       "name": "MiSans / 小米澎湃 OS 字体",
-      "description": "官方页面无稳定公开制品接口；使用 HTTP 指纹检测页面变更并仅提醒。",
+      "description": "官网没有可供字渡直接下载的固定地址；网页有变化时提醒你手动查看。",
       "homepage": "https://hyperos.mi.com/font/zh/",
       "license": {
         "name": "Xiaomi Font License",

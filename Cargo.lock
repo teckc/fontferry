@@ -1299,6 +1299,7 @@ dependencies = [
  "clap",
  "fontferry-core",
  "fontferry-platform",
+ "futures-util",
  "notify-rust",
  "serde",
  "serde_json",
