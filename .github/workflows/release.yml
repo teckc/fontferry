@@ -135,7 +135,7 @@ jobs:
             test -f "$artifact" || continue
             name="$(basename "$artifact")"
             case "$name" in
-              *nsis.zip) platform="windows-x86_64" ;;
+              *setup.exe) platform="windows-x86_64" ;;
               *app.tar.gz) platform="darwin-universal" ;;
               *AppImage*) platform="linux-x86_64" ;;
               *) continue ;;
