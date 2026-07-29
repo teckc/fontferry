@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>FontFerry 字渡</title>
+  <meta name="description" content="跨平台字体发行版本管理器">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="FontFerry 首页">
+      <span class="brand-mark" aria-hidden="true">Ff</span>
+      <span><strong>FontFerry</strong><small>字渡</small></span>
+    </a>
+    <div class="top-actions">
+      <span id="platform-badge" class="badge">正在连接</span>
+      <button id="add-source" class="button ghost" type="button">添加字体源</button>
+      <button id="update-all" class="button primary" type="button">更新全部</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">FONT RELEASE MANAGER</p>
+        <h1 id="page-title">让每台设备的字体<br><em>保持在正确版本。</em></h1>
+      </div>
+      <div class="hero-copy">
+        <p>从 GitHub Releases 和字体官网下载、校验并安装。一个版本处于活动状态，旧版本只用于安全回滚。</p>
+        <label class="schedule-control">
+          <input id="schedule-toggle" type="checkbox">
+          <span>每周自动更新</span>
+        </label>
+      </div>
+    </section>
+
+    <section class="toolbar" aria-label="字体筛选">
+      <div>
+        <h2>字体目录</h2>
+        <p id="catalog-summary">正在读取目录…</p>
+      </div>
+      <label class="search">
+        <span class="sr-only">搜索字体</span>
+        <input id="search" type="search" placeholder="搜索字体或仓库">
+      </label>
+    </section>
+
+    <section id="font-grid" class="font-grid" aria-live="polite"></section>
+  </main>
+
+  <dialog id="manage-dialog" class="dialog">
+    <form method="dialog" class="dialog-shell">
+      <header class="dialog-header">
+        <div>
+          <p class="eyebrow">INSTALLATION</p>
+          <h2 id="manage-title">管理字体</h2>
+        </div>
+        <button class="icon-button" value="cancel" aria-label="关闭">×</button>
+      </header>
+      <div id="manage-content" class="dialog-content"></div>
+      <footer class="dialog-footer">
+        <p id="manage-status" role="status"></p>
+        <button class="button ghost" value="cancel">取消</button>
+        <button id="install-button" class="button primary" type="button">安装所选版本</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="add-dialog" class="dialog compact">
+    <form id="add-form" class="dialog-shell">
+      <header class="dialog-header">
+        <div>
+          <p class="eyebrow">NEW SOURCE</p>
+          <h2>添加 GitHub 字体仓库</h2>
+        </div>
+        <button class="icon-button" type="button" data-close="add-dialog" aria-label="关闭">×</button>
+      </header>
+      <div class="dialog-content form-grid">
+        <label>仓库 <input name="repository" required placeholder="owner/repository"></label>
+        <label>显示名称 <input name="name" required placeholder="字体名称"></label>
+        <label>字体 ID <input name="id" required pattern="[a-z0-9][a-z0-9-]{1,63}" placeholder="font-id"></label>
+        <label>更新通道
+          <select name="channel">
+            <option value="Stable">最新稳定版</option>
+            <option value="Prerelease">包含预发布版</option>
+          </select>
+        </label>
+        <label>主页 <input name="homepage" type="url" required placeholder="https://github.com/..."></label>
+        <label>许可证名称 <input name="licenseName" required value="Unknown"></label>
+        <label class="wide">许可证地址 <input name="licenseUrl" type="url" required placeholder="https://..."></label>
+      </div>
+      <footer class="dialog-footer">
+        <p id="add-status" role="status"></p>
+        <button class="button ghost" type="button" data-close="add-dialog">取消</button>
+        <button class="button primary" type="submit">验证并添加</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <template id="font-card-template">
+    <article class="font-card">
+      <div class="card-top">
+        <span class="source-kind"></span>
+        <span class="install-state"></span>
+      </div>
+      <h3></h3>
+      <p class="description"></p>
+      <div class="card-meta"></div>
+      <footer>
+        <a class="text-link homepage" target="_blank" rel="noreferrer">上游主页 ↗</a>
+        <button class="button manage-button" type="button">选择与安装</button>
+      </footer>
+    </article>
+  </template>
+</body>
+</html>
+

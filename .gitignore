@@ -1,0 +1,13 @@
+bin/
+obj/
+.vs/
+.idea/
+.vscode/
+.tmp-run/
+artifacts/
+publish/
+TestResults/
+*.user
+*.suo
+*.log
+.DS_Store

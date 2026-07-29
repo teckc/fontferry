@@ -1,0 +1,49 @@
+{
+  "id": "misans",
+  "name": "MiSans",
+  "description": "Xiaomi HyperOS 系统字体；官方下载无公开版本 API，使用 ETag 和文件哈希判断变化。",
+  "homepage": "https://hyperos.mi.com/font/zh/download/",
+  "license": {
+    "name": "MiSans 字体知识产权许可协议",
+    "spdx": "LicenseRef-MiSans",
+    "url": "https://hyperos.mi.com/font/zh/download/",
+    "redistribution": false,
+    "requiresAcceptance": true
+  },
+  "source": {
+    "type": "StaticUrl",
+    "url": "https://hyperos.mi.com/font-download/MiSans.zip",
+    "version": null
+  },
+  "presets": [
+    {
+      "id": "sc",
+      "name": "MiSans 简体中文",
+      "assetPattern": "MiSans.zip",
+      "url": "https://hyperos.mi.com/font-download/MiSans.zip",
+      "default": true
+    },
+    {
+      "id": "tc",
+      "name": "MiSans TC",
+      "assetPattern": "MiSans_TC.zip",
+      "url": "https://hyperos.mi.com/font-download/MiSans_TC.zip",
+      "default": false
+    },
+    {
+      "id": "latin",
+      "name": "MiSans Latin",
+      "assetPattern": "MiSans_Latin.zip",
+      "url": "https://hyperos.mi.com/font-download/MiSans_Latin.zip",
+      "default": false
+    },
+    {
+      "id": "global-all",
+      "name": "MiSans Global ALL",
+      "description": "体积较大，且可能滞后于单独语言包。",
+      "assetPattern": "MiSans_Global_ALL.zip",
+      "url": "https://hyperos.mi.com/font-download/MiSans_Global_ALL.zip",
+      "default": false
+    }
+  ]
+}

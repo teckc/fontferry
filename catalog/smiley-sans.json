@@ -1,0 +1,27 @@
+{
+  "id": "smiley-sans",
+  "name": "得意黑",
+  "description": "在人文观感和几何特征中寻找平衡的中文黑体。",
+  "homepage": "https://github.com/atelier-anchor/smiley-sans",
+  "license": {
+    "name": "SIL Open Font License 1.1",
+    "spdx": "OFL-1.1",
+    "url": "https://github.com/atelier-anchor/smiley-sans/blob/main/LICENSE",
+    "redistribution": true,
+    "requiresAcceptance": false
+  },
+  "source": {
+    "type": "GitHubRelease",
+    "repository": "atelier-anchor/smiley-sans",
+    "channel": "Stable"
+  },
+  "presets": [
+    {
+      "id": "standard",
+      "name": "得意黑",
+      "assetPattern": "^smiley-sans-v[0-9.]+\\.zip$",
+      "default": true
+    }
+  ]
+}
+

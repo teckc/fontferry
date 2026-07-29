@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>teckc</Authors>
+    <Product>FontFerry</Product>
+    <Description>Cross-platform font updater for GitHub releases and direct downloads.</Description>
+    <RepositoryUrl>https://github.com/teckc/fontferry</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>

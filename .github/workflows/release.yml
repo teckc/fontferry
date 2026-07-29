@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            archive: zip
+          - os: macos-latest
+            rid: osx-arm64
+            archive: tar
+          - os: macos-latest
+            rid: osx-x64
+            archive: tar
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish
+        run: >-
+          dotnet publish src/FontFerry.App/FontFerry.App.csproj
+          -c Release -r ${{ matrix.rid }} --self-contained
+          -p:PublishSingleFile=true
+          -p:DebugType=None
+          -o artifacts/${{ matrix.rid }}
+      - name: Archive Windows
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: Compress-Archive artifacts/${{ matrix.rid }}/* FontFerry-${{ matrix.rid }}.zip
+      - name: Archive macOS
+        if: matrix.archive == 'tar'
+        run: tar -czf FontFerry-${{ matrix.rid }}.tar.gz -C artifacts/${{ matrix.rid }} .
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: FontFerry-${{ matrix.rid }}.*

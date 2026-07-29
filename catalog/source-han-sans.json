@@ -1,0 +1,39 @@
+{
+  "id": "source-han-sans",
+  "name": "思源黑体",
+  "description": "Adobe 与 Google 联合开发的泛中日韩黑体家族。",
+  "homepage": "https://github.com/adobe-fonts/source-han-sans",
+  "license": {
+    "name": "SIL Open Font License 1.1",
+    "spdx": "OFL-1.1",
+    "url": "https://github.com/adobe-fonts/source-han-sans/blob/master/LICENSE.txt",
+    "redistribution": true,
+    "requiresAcceptance": false
+  },
+  "source": {
+    "type": "GitHubRelease",
+    "repository": "adobe-fonts/source-han-sans",
+    "channel": "Stable"
+  },
+  "presets": [
+    {
+      "id": "cn",
+      "name": "简体中文 CN",
+      "assetPattern": "^19_SourceHanSansCN\\.zip$",
+      "default": true
+    },
+    {
+      "id": "sc",
+      "name": "简体中文 SC 全字重",
+      "assetPattern": "^09_SourceHanSansSC\\.zip$",
+      "default": false
+    },
+    {
+      "id": "variable",
+      "name": "Variable Font",
+      "assetPattern": "^02_SourceHanSans-VF\\.zip$",
+      "default": false
+    }
+  ]
+}
+

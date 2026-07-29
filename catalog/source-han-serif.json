@@ -1,0 +1,39 @@
+{
+  "id": "source-han-serif",
+  "name": "思源宋体",
+  "description": "Adobe 与 Google 联合开发的泛中日韩宋体家族。",
+  "homepage": "https://github.com/adobe-fonts/source-han-serif",
+  "license": {
+    "name": "SIL Open Font License 1.1",
+    "spdx": "OFL-1.1",
+    "url": "https://github.com/adobe-fonts/source-han-serif/blob/master/LICENSE.txt",
+    "redistribution": true,
+    "requiresAcceptance": false
+  },
+  "source": {
+    "type": "GitHubRelease",
+    "repository": "adobe-fonts/source-han-serif",
+    "channel": "Stable"
+  },
+  "presets": [
+    {
+      "id": "cn",
+      "name": "简体中文 CN",
+      "assetPattern": "^14_SourceHanSerifCN\\.zip$",
+      "default": true
+    },
+    {
+      "id": "sc",
+      "name": "简体中文 SC 全字重",
+      "assetPattern": "^09_SourceHanSerifSC\\.zip$",
+      "default": false
+    },
+    {
+      "id": "variable",
+      "name": "Variable Font",
+      "assetPattern": "^02_SourceHanSerif-VF\\.zip$",
+      "default": false
+    }
+  ]
+}
+
