@@ -6,7 +6,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use clap::{Parser, Subcommand};
+use ed25519_dalek::{Signer, SigningKey};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
@@ -21,7 +23,16 @@ struct Xtask {
 enum Task {
     Check,
     ValidateCatalog,
-    Checksums { directory: PathBuf },
+    CatalogPublicKey,
+    SignCatalog {
+        #[arg(default_value = "catalog/builtin/catalog.json")]
+        input: PathBuf,
+        #[arg(default_value = "catalog.json.sig")]
+        output: PathBuf,
+    },
+    Checksums {
+        directory: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -46,6 +57,15 @@ fn main() -> Result<()> {
             run("pnpm", &["build"])
         }
         Task::ValidateCatalog => validate_catalog(),
+        Task::CatalogPublicKey => {
+            let signing_key = catalog_signing_key()?;
+            println!(
+                "{}",
+                STANDARD.encode(signing_key.verifying_key().to_bytes())
+            );
+            Ok(())
+        }
+        Task::SignCatalog { input, output } => sign_catalog(&input, &output),
         Task::Checksums { directory } => checksums(&directory),
     }
 }
@@ -69,6 +89,31 @@ fn validate_catalog() -> Result<()> {
         bail!("catalog must contain at least one font");
     }
     println!("catalog: {} entries", fonts.len());
+    Ok(())
+}
+
+fn catalog_signing_key() -> Result<SigningKey> {
+    let encoded = std::env::var("FONTFERRY_CATALOG_SIGNING_KEY")
+        .context("FONTFERRY_CATALOG_SIGNING_KEY is not set")?;
+    let bytes = STANDARD
+        .decode(encoded.trim())
+        .context("decode catalog signing key as base64")?;
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("catalog signing key must contain exactly 32 bytes"))?;
+    Ok(SigningKey::from_bytes(&bytes))
+}
+
+fn sign_catalog(input: &Path, output: &Path) -> Result<()> {
+    let body = fs::read(input).with_context(|| format!("read {}", input.display()))?;
+    let _: serde_json::Value = serde_json::from_slice(&body).context("parse catalog JSON")?;
+    let signature = catalog_signing_key()?.sign(&body);
+    fs::write(
+        output,
+        format!("{}\n", STANDARD.encode(signature.to_bytes())),
+    )
+    .with_context(|| format!("write {}", output.display()))?;
+    println!("signed {} -> {}", input.display(), output.display());
     Ok(())
 }
 

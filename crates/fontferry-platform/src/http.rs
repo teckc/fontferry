@@ -69,8 +69,7 @@ impl ReleaseSource for CachedReleaseSource {
                     tracing::warn!(
                         font_id = %font.id,
                         checked_at = %cached.checked_at,
-                        error = %network_error,
-                        "using cached release metadata"
+                        "network check failed; using cached release metadata"
                     );
                     Ok(cached.releases)
                 } else {

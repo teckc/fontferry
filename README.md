@@ -42,6 +42,7 @@ fontferry update --eligible --headless
 Alpha/Beta 可以提供明确标注的未签名平台安装包。正式稳定版必须配置 Windows
 代码签名以及 macOS Developer ID 签名和公证。Tauri updater 制品始终要求更新专用
 Ed25519 签名；deb/rpm 只通知，由 apt/dnf 更新。
+密钥生成、目录签名和发布门禁见 [发布与目录签名](docs/release-signing.md)。
 
 项目代码采用 Apache-2.0。字体文件、字体名称和商标不属于本项目许可证，详见
 各上游许可证与 [NOTICE](NOTICE)。

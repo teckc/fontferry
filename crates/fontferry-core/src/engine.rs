@@ -290,3 +290,252 @@ fn requested_release<'a>(
         select_latest(releases, channel, policy).ok_or(FontFerryError::NoEligibleVersion)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::BTreeSet,
+        path::{Path, PathBuf},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use async_trait::async_trait;
+    use time::macros::datetime;
+    use url::Url;
+
+    use super::*;
+    use crate::{
+        ArtifactProvider, ArtifactSource, FontPreparer, InstallOutcome, LicensePolicy,
+        ObservedFont, Platform, PreparedFont, ReleaseAsset, RollbackSnapshot, VersionPolicy,
+        VersionProvider,
+    };
+
+    struct StaticReleases;
+
+    #[async_trait]
+    impl ReleaseSource for StaticReleases {
+        async fn releases(
+            &self,
+            _font: &FontDefinition,
+            _provider: &VersionProvider,
+        ) -> Result<Vec<Release>> {
+            Ok(vec![Release {
+                version: "2.0.0".into(),
+                published_at: datetime!(2026-01-01 0:00 UTC),
+                prerelease: false,
+                assets: vec![ReleaseAsset {
+                    name: "font.zip".into(),
+                    url: "https://example.com/font.zip".into(),
+                    size: 10,
+                    digest: None,
+                }],
+            }])
+        }
+    }
+
+    struct EmptyArtifact;
+
+    #[async_trait]
+    impl ArtifactSource for EmptyArtifact {
+        async fn download(
+            &self,
+            _font: &FontDefinition,
+            _provider: &ArtifactProvider,
+            _release: &Release,
+            _variant_ids: &[String],
+            _staging_directory: &Path,
+        ) -> Result<Vec<PathBuf>> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct PreparedArtifact;
+
+    #[async_trait]
+    impl FontPreparer for PreparedArtifact {
+        async fn prepare(
+            &self,
+            _downloaded: &[PathBuf],
+            staging_directory: &Path,
+        ) -> Result<Vec<PreparedFont>> {
+            Ok(vec![PreparedFont {
+                path: staging_directory.join("font.ttf"),
+                family: "Test".into(),
+                style: "Regular".into(),
+                postscript_name: Some("Test-Regular".into()),
+                version: Some("2.0.0".into()),
+                sha256: "00".repeat(32),
+            }])
+        }
+    }
+
+    struct TrackingInstaller {
+        uninstall_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl FontInstaller for TrackingInstaller {
+        async fn install(
+            &self,
+            _font: &FontDefinition,
+            _version: &str,
+            _prepared: &[PreparedFont],
+            _previous: Option<&InstalledFont>,
+        ) -> Result<InstallOutcome> {
+            Ok(InstallOutcome {
+                owned_files: vec![PathBuf::from("managed.ttf")],
+                previous_snapshot: None,
+                restart_recommended: false,
+                warnings: Vec::new(),
+            })
+        }
+
+        async fn uninstall(&self, _installed: &InstalledFont) -> Result<()> {
+            self.uninstall_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn restore(
+            &self,
+            _font: &FontDefinition,
+            _snapshot: &RollbackSnapshot,
+            _current: &InstalledFont,
+        ) -> Result<InstallOutcome> {
+            Err(FontFerryError::NoRollbackSnapshot)
+        }
+    }
+
+    struct FailingState {
+        observed: Option<ObservedFont>,
+    }
+
+    #[async_trait]
+    impl StateRepository for FailingState {
+        async fn list_installed(&self) -> Result<Vec<InstalledFont>> {
+            Ok(Vec::new())
+        }
+
+        async fn get_installed(&self, _font_id: &str) -> Result<Option<InstalledFont>> {
+            Ok(None)
+        }
+
+        async fn save_installed(&self, _installed: &InstalledFont) -> Result<()> {
+            Err(FontFerryError::State("injected commit failure".into()))
+        }
+
+        async fn remove_installed(&self, _font_id: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn is_license_accepted(&self, _font_id: &str, _revision: &str) -> Result<bool> {
+            Ok(true)
+        }
+
+        async fn accept_license(&self, _font_id: &str, _revision: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn append_activity(&self, _activity: &Activity) -> Result<()> {
+            Ok(())
+        }
+
+        async fn get_observed(&self, _font_id: &str) -> Result<Option<ObservedFont>> {
+            Ok(self.observed.clone())
+        }
+    }
+
+    fn font(
+        delivery_policy: DeliveryPolicy,
+    ) -> std::result::Result<FontDefinition, url::ParseError> {
+        Ok(FontDefinition {
+            id: "test-font".into(),
+            name: "Test Font".into(),
+            description: "Test".into(),
+            homepage: Url::parse("https://example.com")?,
+            license: LicensePolicy {
+                name: "OFL".into(),
+                url: Url::parse("https://example.com/license")?,
+                spdx: Some("OFL-1.1".into()),
+                revision: "1".into(),
+                requires_acceptance: false,
+                redistribution_allowed: true,
+            },
+            version_provider: VersionProvider::GitHubRelease {
+                repository: "example/font".into(),
+                channel: ReleaseChannel::Stable,
+            },
+            artifact_provider: (delivery_policy == DeliveryPolicy::AutoInstall).then(|| {
+                ArtifactProvider::GitHubAsset {
+                    repository: "example/font".into(),
+                }
+            }),
+            delivery_policy,
+            version_policy: VersionPolicy::default(),
+            variants: Vec::new(),
+            platforms: BTreeSet::from([Platform::Windows]),
+        })
+    }
+
+    #[tokio::test]
+    async fn compensates_platform_install_when_state_commit_fails()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let staging = tempfile::tempdir()?;
+        let uninstall_count = Arc::new(AtomicUsize::new(0));
+        let engine = FontEngine::new(
+            vec![font(DeliveryPolicy::AutoInstall)?],
+            Arc::new(StaticReleases),
+            Arc::new(EmptyArtifact),
+            Arc::new(PreparedArtifact),
+            Arc::new(TrackingInstaller {
+                uninstall_count: uninstall_count.clone(),
+            }),
+            Arc::new(FailingState { observed: None }),
+            staging.path().to_path_buf(),
+        );
+        let result = engine
+            .install(InstallRequest {
+                font_id: "test-font".into(),
+                version: None,
+                variant_ids: Vec::new(),
+                accept_license: false,
+            })
+            .await;
+        assert!(matches!(result, Err(FontFerryError::State(_))));
+        assert_eq!(uninstall_count.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn uses_observed_version_for_reminder_only_fonts()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let staging = tempfile::tempdir()?;
+        let engine = FontEngine::new(
+            vec![font(DeliveryPolicy::NotifyOnly)?],
+            Arc::new(StaticReleases),
+            Arc::new(EmptyArtifact),
+            Arc::new(PreparedArtifact),
+            Arc::new(TrackingInstaller {
+                uninstall_count: Arc::new(AtomicUsize::new(0)),
+            }),
+            Arc::new(FailingState {
+                observed: Some(ObservedFont {
+                    font_id: "test-font".into(),
+                    detected_version: Some("1.0.0".into()),
+                    manual_version: None,
+                    observed_files: vec![PathBuf::from("observed.ttf")],
+                    scanned_at: datetime!(2026-01-01 0:00 UTC),
+                }),
+            }),
+            staging.path().to_path_buf(),
+        );
+        let status = engine.check_font("test-font").await?;
+        assert_eq!(status.current_version.as_deref(), Some("1.0.0"));
+        assert_eq!(status.available_version.as_deref(), Some("2.0.0"));
+        assert!(status.update_available);
+        assert_eq!(status.delivery_policy, DeliveryPolicy::NotifyOnly);
+        Ok(())
+    }
+}

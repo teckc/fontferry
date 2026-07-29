@@ -29,6 +29,8 @@
   let sourceAssetPattern = ".*\\.(zip|7z|tar\\.gz)$";
   let sourceHomepage = "";
   let manualVersion = "";
+  let updateChannel = "stable";
+  let appUpdateAvailable = false;
 
   const navigation: { id: Page; label: string; symbol: string }[] = [
     { id: "dashboard", label: "仪表盘", symbol: "◫" },
@@ -194,6 +196,44 @@
       });
       message = "本地版本修正已保存";
       await check(font.id);
+    } catch (cause) {
+      error = String(cause);
+    }
+  }
+
+  async function checkAppUpdate() {
+    try {
+      const update = await invoke<{ available: boolean; version: string | null }>(
+        "check_app_update",
+        { channel: updateChannel },
+      );
+      message = update.available
+        ? `FontFerry ${update.version} 可用`
+        : "FontFerry 已是当前通道的最新版本";
+      appUpdateAvailable = update.available;
+    } catch (cause) {
+      error = String(cause);
+    }
+  }
+
+  async function installAppUpdate() {
+    try {
+      message = "正在下载并验证程序更新…";
+      const installed = await invoke<boolean>("install_app_update", {
+        channel: updateChannel,
+      });
+      message = installed
+        ? "更新安装已启动；请按系统提示完成或重新启动 FontFerry"
+        : "没有可安装的程序更新";
+    } catch (cause) {
+      error = String(cause);
+      message = "";
+    }
+  }
+
+  async function refreshCatalog() {
+    try {
+      message = await invoke<string>("refresh_catalog");
     } catch (cause) {
       error = String(cause);
     }
@@ -371,13 +411,18 @@
         </article>
         <article class="panel">
           <h2>程序更新</h2>
-          <div class="setting-row"><span><strong>更新通道</strong><small>稳定版使用 latest.json，测试版使用 beta 清单</small></span><select><option>稳定</option><option>测试</option></select></div>
+          <div class="setting-row"><span><strong>更新通道</strong><small>稳定版使用 latest.json，测试版使用 beta 清单</small></span><select bind:value={updateChannel}><option value="stable">稳定</option><option value="beta">测试</option></select></div>
+          <button class="primary" onclick={checkAppUpdate}>检查程序更新</button>
+          {#if appUpdateAvailable}
+            <button class="quiet" onclick={installAppUpdate}>下载并安装已签名更新</button>
+          {/if}
           <p class="muted">AppImage 支持自动更新；deb/rpm 仅提醒并交给系统包管理器。</p>
         </article>
         <article class="panel">
           <h2>目录信任</h2>
           <div class="setting-row"><span><strong>内置目录</strong><small>builtin-2026-07-29</small></span><span class="pill">可用</span></div>
           <div class="setting-row"><span><strong>远程签名目录</strong><small>验签失败时使用最后成功缓存</small></span><span class="pill reminder">待配置密钥</span></div>
+          <button class="quiet" onclick={refreshCatalog}>刷新并验签目录</button>
         </article>
       </section>
     {/if}

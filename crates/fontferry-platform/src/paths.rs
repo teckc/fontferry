@@ -41,4 +41,12 @@ impl AppPaths {
     pub fn database(&self) -> PathBuf {
         self.data.join("fontferry.db")
     }
+
+    pub fn catalog_cache_body(&self) -> PathBuf {
+        self.cache.join("catalog.json")
+    }
+
+    pub fn catalog_cache_signature(&self) -> PathBuf {
+        self.cache.join("catalog.json.sig")
+    }
 }
