@@ -1,9 +1,0 @@
-<Solution>
-  <Folder Name="/src/">
-    <Project Path="src/FontFerry.App/FontFerry.App.csproj" />
-    <Project Path="src/FontFerry.Core/FontFerry.Core.csproj" />
-  </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/FontFerry.Tests/FontFerry.Tests.csproj" />
-  </Folder>
-</Solution>
