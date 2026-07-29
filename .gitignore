@@ -1,0 +1,16 @@
+/target/
+**/node_modules/
+/ui/dist/
+/apps/fontferry/src-tauri/gen/
+/apps/fontferry/src-tauri/icons/android/
+/apps/fontferry/src-tauri/icons/ios/
+/.idea/
+/.vscode/
+*.log
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+.DS_Store
