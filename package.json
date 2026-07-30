@@ -1,6 +1,6 @@
 {
   "name": "fontferry",
-  "version": "0.2.0-alpha.2",
+  "version": "0.2.0-alpha.3",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.9.0",

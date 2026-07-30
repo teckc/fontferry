@@ -3,7 +3,7 @@
 FontFerry 是一个面向 Windows、macOS 和 Linux 的每用户字体更新管理器。它使用
 Tauri 2、Svelte 5 与 Rust 构建，GUI 和无界面计划任务共用同一个安装引擎。
 
-当前版本：`0.2.0-alpha.2`。
+当前版本：`0.2.0-alpha.3`。
 
 ## 能力
 
