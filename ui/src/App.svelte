@@ -307,8 +307,16 @@
 <div class="shell">
   <aside>
     <div class="brand">
-      <div class="brandmark">F</div>
-      <div><strong>FontFerry</strong><small>字渡</small></div>
+      <div class="brandmark" aria-hidden="true">
+        <svg viewBox="0 0 512 512">
+          <path d="M256 88v36" />
+          <path d="M132 201v-49h248v49" />
+          <path d="M180 226h156l-80 65v103" />
+          <path d="M145 306h222" />
+          <path d="M256 394h-64" />
+        </svg>
+      </div>
+      <div><strong>字渡</strong><small>FontFerry</small></div>
     </div>
     <nav aria-label="主导航">
       {#each navigation as item}
@@ -468,7 +476,7 @@
         </article>
         <article class="panel">
           <h2>外观</h2>
-          <div class="setting-row"><span><strong>颜色模式</strong><small>浅色使用米白色，深色使用灰黑色</small></span>
+          <div class="setting-row"><span><strong>颜色模式</strong><small>浅色与深色均使用黑白灰配色</small></span>
             <select bind:value={theme} onchange={changeTheme}>
               <option value="system">跟随系统</option>
               <option value="light">浅色</option>
