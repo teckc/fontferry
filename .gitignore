@@ -1,6 +1,7 @@
 /target/
 **/node_modules/
 /ui/dist/
+/test-results/
 /apps/fontferry/src-tauri/gen/
 /apps/fontferry/src-tauri/icons/android/
 /apps/fontferry/src-tauri/icons/ios/

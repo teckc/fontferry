@@ -2,7 +2,7 @@
   font-family: Georgia, "Songti SC", STSong, "Noto Serif CJK SC", "Source Han Serif SC", SimSun, serif;
   color: #171717;
   background: #f7f7f7;
-  font-synthesis: none;
+  font-synthesis: weight;
   --bg: #f7f7f7;
   --sidebar: #f0f0f0;
   --surface: #ffffff;
@@ -84,8 +84,8 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 900px; min-height: 100vh; background: var(--bg); color: var(--text); }
-button, input, select { font: inherit; }
+body { margin: 0; min-width: 900px; min-height: 100vh; background: var(--bg); color: var(--text); font-weight: 500; line-height: 1.45; }
+button, input, select { font: inherit; font-weight: 600; }
 button, a { -webkit-tap-highlight-color: transparent; }
 button { color: inherit; }
 
@@ -96,10 +96,10 @@ aside { position: fixed; inset: 0 auto 0 0; width: 230px; height: 100vh; padding
 .brandmark span { position: relative; display: grid; place-items: center; color: #fff; font-family: "Noto Serif SC", "Songti SC", STSong, SimSun, serif; font-size: 29px; font-weight: 900; line-height: 1; -webkit-text-stroke: .45px #fff; }
 .brandmark span::after { position: absolute; inset: 0; display: grid; place-items: center; color: #111; content: "字"; clip-path: inset(0 0 0 50%); -webkit-text-stroke: .45px #111; }
 .brand strong, .brand small { display: block; }
-.brand strong { font-size: 20px; letter-spacing: .08em; }
-.brand small { margin-top: 2px; color: var(--muted); font-size: 10px; letter-spacing: .08em; }
+.brand strong { font-size: 20px; font-weight: 800; letter-spacing: .08em; }
+.brand small { margin-top: 2px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .08em; }
 nav { display: grid; gap: 5px; }
-nav button { border: 0; background: transparent; color: var(--muted); border-radius: 9px; padding: 11px 12px; display: grid; grid-template-columns: 30px 1fr auto; align-items: center; text-align: left; cursor: pointer; }
+nav button { border: 0; background: transparent; color: var(--muted); border-radius: 9px; padding: 11px 12px; display: grid; grid-template-columns: 30px 1fr auto; align-items: center; text-align: left; font-weight: 650; cursor: pointer; }
 nav button:hover { background: var(--hover); color: var(--text); }
 nav button.active { background: var(--accent-soft); color: var(--text); }
 nav button span { color: var(--accent); font-size: 13px; font-weight: 700; }
@@ -108,11 +108,11 @@ nav button b { min-width: 20px; padding: 2px 6px; border-radius: 20px; backgroun
 main { grid-column: 2; padding: 42px 48px 70px; max-width: 1480px; width: 100%; margin: 0 auto; background: var(--bg); }
 header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
 h1, h2, h3, p { margin-top: 0; }
-header h1 { margin: 0; font: 600 31px Georgia, "Songti SC", serif; }
+header h1 { margin: 0; font: 700 31px Georgia, "Songti SC", serif; }
 .eyebrow { margin-bottom: 4px; color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .12em; }
-.quiet, .primary { border: 1px solid var(--border-strong); border-radius: 8px; padding: 9px 15px; background: var(--surface); cursor: pointer; }
+.quiet, .primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--border-strong); border-radius: 8px; padding: 9px 15px; background: var(--surface); font-weight: 700; cursor: pointer; }
 .quiet:hover { background: var(--hover); }
-.primary { background: var(--button); border-color: var(--button); color: var(--button-text); font-weight: 650; }
+.primary { background: var(--button); border-color: var(--button); color: var(--button-text); font-weight: 750; }
 .primary:hover { filter: brightness(1.12); }
 button:disabled { cursor: default; opacity: .5; }
 
@@ -120,19 +120,20 @@ button:disabled { cursor: default; opacity: .5; }
 .metrics article, .panel, .font-card { background: var(--surface); border: 1px solid var(--border); border-radius: 13px; box-shadow: 0 4px 18px var(--shadow); }
 .metrics article { min-height: 145px; padding: 20px; }
 .metrics article.accent { background: var(--accent-soft); border-color: var(--border-strong); }
-.metrics small { color: var(--muted); font-weight: 600; }
-.metrics strong { display: block; margin: 12px 0 6px; font: 600 37px Georgia, serif; }
-.metrics p { margin: 0; color: var(--faint); font-size: 11px; }
+.metrics small { color: var(--muted); font-weight: 700; }
+.metrics strong { display: block; margin: 12px 0 6px; font: 700 37px Georgia, serif; }
+.metrics p { margin: 0; color: var(--faint); font-size: 12px; font-weight: 600; }
 .panel { padding: 22px; }
 .panel-title { display: flex; align-items: start; justify-content: space-between; margin-bottom: 17px; }
-.panel h2, .panel-title h2 { margin-bottom: 4px; font-size: 16px; }
-.panel-title p, .muted { margin: 0; color: var(--muted); font-size: 12px; }
+.panel h2, .panel-title h2 { margin-bottom: 4px; font-size: 16px; font-weight: 750; }
+.panel-title p, .muted { margin: 0; color: var(--muted); font-size: 12px; font-weight: 550; }
 .rows { border-top: 1px solid var(--border); }
 .font-row { width: 100%; display: flex; gap: 14px; align-items: center; padding: 14px 4px; border: 0; border-bottom: 1px solid var(--border); background: transparent; text-align: left; cursor: pointer; }
 .font-row:hover { padding-left: 9px; background: var(--hover); }
 .grow { flex: 1; }
 .grow strong, .grow small { display: block; }
-.grow small { margin-top: 4px; color: var(--muted); }
+.grow strong { font-weight: 750; }
+.grow small { margin-top: 4px; color: var(--muted); font-weight: 550; }
 .font-avatar { width: 38px; height: 38px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font: 600 18px Georgia, "Songti SC", serif; }
 .font-avatar.large { width: 46px; height: 46px; font-size: 21px; }
 .pill { display: inline-flex; align-items: center; border-radius: 20px; padding: 4px 9px; background: var(--success-bg); color: var(--success-text); font-size: 10px; font-weight: 700; white-space: nowrap; }
@@ -147,10 +148,10 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px v
 .font-card { min-height: 235px; padding: 18px; text-align: left; cursor: pointer; }
 .font-card:hover { transform: translateY(-2px); border-color: var(--border-strong); box-shadow: 0 8px 25px var(--shadow); }
 .card-top { display: flex; justify-content: space-between; }
-.font-card h2 { margin: 17px 0 2px; font: 600 19px Georgia, "Songti SC", serif; }
-.font-card code { color: var(--muted); font-size: 10px; }
-.font-card p { min-height: 40px; margin: 13px 0 20px; color: var(--muted); font-size: 12px; line-height: 1.65; }
-.font-card footer { display: flex; justify-content: space-between; color: var(--faint); font-size: 10px; }
+.font-card h2 { margin: 17px 0 2px; font: 700 19px Georgia, "Songti SC", serif; }
+.font-card code { color: var(--muted); font-size: 11px; font-weight: 600; }
+.font-card p { min-height: 40px; margin: 13px 0 20px; color: var(--muted); font-size: 12px; font-weight: 550; line-height: 1.65; }
+.font-card footer { display: flex; justify-content: space-between; color: var(--faint); font-size: 11px; font-weight: 600; }
 .font-card footer strong { color: var(--accent); }
 
 .split { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, .8fr); gap: 16px; }
@@ -172,11 +173,21 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px v
 .switch-row strong, .switch-row small, .setting-row strong, .setting-row small { display: block; }
 .switch-row small, .setting-row small { margin-top: 4px; color: var(--muted); font-size: 11px; }
 .switch-row input { width: 38px; min-height: auto; accent-color: var(--accent); }
-.notice { display: flex; align-items: start; gap: 10px; padding: 12px 14px; margin-bottom: 14px; border-radius: 9px; font-size: 12px; }
+.notice { display: flex; align-items: start; gap: 10px; padding: 12px 14px; margin-bottom: 14px; border-radius: 9px; font-size: 12px; font-weight: 600; }
 .notice p { margin: 0; }
 .notice strong { display: block; margin-bottom: 2px; }
 .notice.error { background: var(--error-bg); color: var(--error-text); }
 .notice.success { background: var(--success-bg); color: var(--success-text); }
+.operation-status { display: flex; align-items: center; gap: 14px; padding: 14px 16px; margin-bottom: 14px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); box-shadow: 0 4px 18px var(--shadow); }
+.operation-spinner, .button-spinner { flex: 0 0 auto; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+.operation-spinner { width: 26px; height: 26px; }
+.button-spinner { width: 14px; height: 14px; border-width: 2px; border-color: currentColor transparent currentColor currentColor; }
+.operation-copy { flex: 1; min-width: 0; }
+.operation-copy strong { display: block; font-size: 13px; font-weight: 750; }
+.operation-copy p { margin: 3px 0 9px; color: var(--muted); font-size: 12px; font-weight: 550; }
+.operation-track { position: relative; display: block; height: 3px; overflow: hidden; border-radius: 3px; background: var(--accent-soft); }
+.operation-track i { position: absolute; inset-block: 0; width: 38%; border-radius: inherit; background: var(--accent); animation: operation-slide 1.25s ease-in-out infinite; }
+@keyframes operation-slide { from { left: -38%; } to { left: 100%; } }
 .loading { min-height: 400px; display: grid; place-content: center; justify-items: center; color: var(--muted); }
 .loading div { width: 28px; height: 28px; margin-bottom: 12px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

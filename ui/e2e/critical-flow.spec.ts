@@ -57,6 +57,14 @@ test.beforeEach(async ({ page }) => {
       value: {
         invoke: async (command: string) => {
           if (command === "dashboard") return data;
+          if (command === "check_updates") {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            return { statuses: data.statuses, failures: 0 };
+          }
+          if (command === "install_font") {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            return null;
+          }
           throw new Error(`unexpected command: ${command}`);
         },
       },
@@ -80,4 +88,33 @@ test("opens the catalog and lets the user choose variants", async ({ page }) => 
   await expect(dialog.getByLabel("MapleMono-NF-CN")).toBeChecked();
   await dialog.getByLabel("MapleMonoNL-NF-CN").check();
   await expect(dialog.getByLabel("MapleMonoNL-NF-CN")).toBeChecked();
+});
+
+test("shows progress while checking font updates", async ({ page }) => {
+  await page.goto("/");
+
+  const checkButton = page.getByRole("button", { name: "检查字体更新" });
+  await checkButton.click();
+
+  await expect(page.getByTestId("operation-status")).toContainText("正在检查所有字体");
+  await expect(page.getByRole("button", { name: "正在检查…" })).toBeDisabled();
+  await expect(page.getByText("字体更新检查完成")).toBeVisible();
+  await expect(page.getByTestId("operation-status")).toBeHidden();
+});
+
+test("shows progress while downloading and installing a font", async ({ page }) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: /Aa\s*字体/ })
+    .click();
+  await page.getByRole("button", { name: /Maple Mono/ }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Maple Mono" });
+  await dialog.getByRole("button", { name: "安装或更新" }).click();
+
+  await expect(page.getByTestId("operation-status")).toContainText("正在安装 Maple Mono");
+  await expect(dialog.getByRole("button", { name: "正在安装…" })).toBeDisabled();
+  await expect(page.getByText("安装完成")).toBeVisible();
+  await expect(page.getByTestId("operation-status")).toBeHidden();
 });

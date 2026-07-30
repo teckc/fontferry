@@ -11,12 +11,22 @@
 
   type Page = "dashboard" | "catalog" | "sources" | "activity" | "settings";
   type Theme = "system" | "light" | "dark";
+  type OperationKind =
+    | "check-fonts"
+    | "install-font"
+    | "check-app"
+    | "install-app"
+    | "refresh-catalog";
+  type Operation = {
+    kind: OperationKind;
+    title: string;
+    detail: string;
+  };
 
   let page: Page = "dashboard";
   let data: Dashboard = { fonts: [], installed: [], statuses: [], activities: [] };
   let selected: FontDefinition | null = null;
   let loading = true;
-  let checking = false;
   let message = "";
   let error = "";
   let query = "";
@@ -33,6 +43,7 @@
   let updateChannel = "stable";
   let appUpdateAvailable = false;
   let theme: Theme = "system";
+  let operation: Operation | null = null;
 
   const navigation: { id: Page; label: string; symbol: string }[] = [
     { id: "dashboard", label: "概览", symbol: "◫" },
@@ -98,8 +109,14 @@
   }
 
   async function check(fontId: string) {
-    checking = true;
+    if (operation) return;
+    operation = {
+      kind: "check-fonts",
+      title: "正在检查字体更新",
+      detail: "正在连接字体来源并比较版本，请稍候。",
+    };
     error = "";
+    message = "";
     try {
       const result = await invoke<UpdateStatus>("check_font", { fontId });
       data.statuses = [...data.statuses.filter((item) => item.fontId !== fontId), result];
@@ -107,14 +124,19 @@
     } catch (cause) {
       error = String(cause);
     } finally {
-      checking = false;
+      operation = null;
     }
   }
 
   async function checkAllUpdates() {
-    checking = true;
+    if (operation) return;
+    operation = {
+      kind: "check-fonts",
+      title: "正在检查所有字体",
+      detail: "正在连接字体来源并比较版本，请稍候。",
+    };
     error = "";
-    message = "正在检查字体更新…";
+    message = "";
     try {
       const result = await invoke<{ statuses: UpdateStatus[]; failures: number }>(
         "check_updates",
@@ -131,13 +153,19 @@
       error = String(cause);
       message = "";
     } finally {
-      checking = false;
+      operation = null;
     }
   }
 
   async function install(font: FontDefinition) {
+    if (operation) return;
+    operation = {
+      kind: "install-font",
+      title: `正在安装 ${font.name}`,
+      detail: "正在下载、验证并安装字体。完成前请不要关闭字渡。",
+    };
     error = "";
-    message = "正在下载并验证…";
+    message = "";
     try {
       await invoke("install_font", {
         input: {
@@ -152,6 +180,8 @@
     } catch (cause) {
       error = String(cause);
       message = "";
+    } finally {
+      operation = null;
     }
   }
 
@@ -247,6 +277,14 @@
   }
 
   async function checkAppUpdate() {
+    if (operation) return;
+    operation = {
+      kind: "check-app",
+      title: "正在检查字渡更新",
+      detail: "正在连接更新服务器并检查当前通道。",
+    };
+    error = "";
+    message = "";
     try {
       const update = await invoke<{ available: boolean; version: string | null }>(
         "check_app_update",
@@ -258,12 +296,22 @@
       appUpdateAvailable = update.available;
     } catch (cause) {
       error = String(cause);
+      message = "";
+    } finally {
+      operation = null;
     }
   }
 
   async function installAppUpdate() {
+    if (operation) return;
+    operation = {
+      kind: "install-app",
+      title: "正在下载字渡更新",
+      detail: "正在下载并验证更新包。完成前请不要关闭字渡。",
+    };
+    error = "";
+    message = "";
     try {
-      message = "正在下载程序更新…";
       const installed = await invoke<boolean>("install_app_update", {
         channel: updateChannel,
       });
@@ -273,14 +321,27 @@
     } catch (cause) {
       error = String(cause);
       message = "";
+    } finally {
+      operation = null;
     }
   }
 
   async function refreshCatalog() {
+    if (operation) return;
+    operation = {
+      kind: "refresh-catalog",
+      title: "正在更新字体列表",
+      detail: "正在获取并验证最新字体信息。",
+    };
+    error = "";
+    message = "";
     try {
       message = await invoke<string>("refresh_catalog");
     } catch (cause) {
       error = String(cause);
+      message = "";
+    } finally {
+      operation = null;
     }
   }
 
@@ -327,16 +388,27 @@
       <div>
         <h1>{navigation.find((item) => item.id === page)?.label}</h1>
       </div>
-      <button class="primary" onclick={checkAllUpdates} disabled={checking}>
-        {checking ? "正在检查…" : "检查字体更新"}
+      <button class="primary" onclick={checkAllUpdates} disabled={operation !== null}>
+        {#if operation?.kind === "check-fonts"}<span class="button-spinner"></span>{/if}
+        {operation?.kind === "check-fonts" ? "正在检查…" : "检查字体更新"}
       </button>
     </header>
 
     {#if error}
-      <div class="notice error"><span>!</span><div><strong>操作失败</strong><p>{error}</p></div></div>
+      <div class="notice error" role="alert"><span>!</span><div><strong>操作失败</strong><p>{error}</p></div></div>
     {/if}
     {#if message}
-      <div class="notice success"><span>✓</span><p>{message}</p></div>
+      <div class="notice success" role="status" aria-live="polite"><span>✓</span><p>{message}</p></div>
+    {/if}
+    {#if operation}
+      <div class="operation-status" role="status" aria-live="polite" data-testid="operation-status">
+        <span class="operation-spinner" aria-hidden="true"></span>
+        <div class="operation-copy">
+          <strong>{operation.title}</strong>
+          <p>{operation.detail}</p>
+          <span class="operation-track" aria-hidden="true"><i></i></span>
+        </div>
+      </div>
     {/if}
 
     {#if loading}
@@ -456,9 +528,15 @@
         <article class="panel">
           <h2>程序更新</h2>
           <div class="setting-row"><span><strong>更新通道</strong><small>稳定版更可靠；测试版可以提前体验新功能</small></span><select bind:value={updateChannel}><option value="stable">稳定版</option><option value="beta">测试版</option></select></div>
-          <button class="primary" onclick={checkAppUpdate}>检查程序更新</button>
+          <button class="primary" onclick={checkAppUpdate} disabled={operation !== null}>
+            {#if operation?.kind === "check-app"}<span class="button-spinner"></span>{/if}
+            {operation?.kind === "check-app" ? "正在检查…" : "检查程序更新"}
+          </button>
           {#if appUpdateAvailable}
-            <button class="quiet" onclick={installAppUpdate}>安装更新</button>
+            <button class="quiet" onclick={installAppUpdate} disabled={operation !== null}>
+              {#if operation?.kind === "install-app"}<span class="button-spinner"></span>{/if}
+              {operation?.kind === "install-app" ? "正在下载…" : "安装更新"}
+            </button>
           {/if}
           <p class="muted">通过系统软件商店安装的版本，请在系统中更新。</p>
         </article>
@@ -466,7 +544,10 @@
           <h2>字体列表</h2>
           <div class="setting-row"><span><strong>内置字体</strong><small>随字渡提供，离线也可查看</small></span><span class="pill">可用</span></div>
           <div class="setting-row"><span><strong>在线字体列表</strong><small>更新失败时继续使用上次保存的内容</small></span></div>
-          <button class="quiet" onclick={refreshCatalog}>更新字体列表</button>
+          <button class="quiet" onclick={refreshCatalog} disabled={operation !== null}>
+            {#if operation?.kind === "refresh-catalog"}<span class="button-spinner"></span>{/if}
+            {operation?.kind === "refresh-catalog" ? "正在更新…" : "更新字体列表"}
+          </button>
         </article>
         <article class="panel">
           <h2>外观</h2>
@@ -516,9 +597,15 @@
         </div>
       {/if}
       <div class="drawer-actions">
-        <button class="quiet" onclick={() => check(selected!.id)} disabled={checking}>{checking ? "检查中…" : "检查更新"}</button>
+        <button class="quiet" onclick={() => check(selected!.id)} disabled={operation !== null}>
+          {#if operation?.kind === "check-fonts"}<span class="button-spinner"></span>{/if}
+          {operation?.kind === "check-fonts" ? "检查中…" : "检查更新"}
+        </button>
         {#if selected.deliveryPolicy === "autoInstall"}
-          <button class="primary" onclick={() => install(selected!)} disabled={!selectedVariants.length}>安装或更新</button>
+          <button class="primary" onclick={() => install(selected!)} disabled={!selectedVariants.length || operation !== null}>
+            {#if operation?.kind === "install-font"}<span class="button-spinner"></span>{/if}
+            {operation?.kind === "install-font" ? "正在安装…" : "安装或更新"}
+          </button>
         {:else}
           <a class="primary link" href={selected.homepage} target="_blank" rel="noreferrer">前往官方渠道</a>
         {/if}
