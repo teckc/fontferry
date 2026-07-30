@@ -39,6 +39,7 @@ fn main() -> Result<()> {
     let task = Xtask::parse().command;
     match task {
         Task::Check => {
+            let pnpm = if cfg!(windows) { "pnpm.cmd" } else { "pnpm" };
             run("cargo", &["fmt", "--all", "--", "--check"])?;
             run(
                 "cargo",
@@ -52,9 +53,9 @@ fn main() -> Result<()> {
                 ],
             )?;
             run("cargo", &["test", "--workspace"])?;
-            run("pnpm", &["check"])?;
-            run("pnpm", &["test"])?;
-            run("pnpm", &["build"])
+            run(pnpm, &["check"])?;
+            run(pnpm, &["test"])?;
+            run(pnpm, &["build"])
         }
         Task::ValidateCatalog => validate_catalog(),
         Task::CatalogPublicKey => {

@@ -1293,7 +1293,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "fontferry"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1319,7 +1319,7 @@ dependencies = [
 
 [[package]]
 name = "fontferry-core"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "async-trait",
  "regex",
@@ -1336,7 +1336,7 @@ dependencies = [
 
 [[package]]
 name = "fontferry-platform"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6063,7 +6063,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
