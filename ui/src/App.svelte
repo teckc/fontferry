@@ -308,13 +308,7 @@
   <aside>
     <div class="brand">
       <div class="brandmark" aria-hidden="true">
-        <svg viewBox="0 0 512 512">
-          <path d="M256 88v36" />
-          <path d="M132 201v-49h248v49" />
-          <path d="M180 226h156l-80 65v103" />
-          <path d="M145 306h222" />
-          <path d="M256 394h-64" />
-        </svg>
+        <span>字</span>
       </div>
       <div><strong>字渡</strong><small>FontFerry</small></div>
     </div>
