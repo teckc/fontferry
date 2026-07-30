@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0-alpha.3"
+version = "0.2.0-alpha.4"
 edition = "2024"
 rust-version = "1.97.1"
 authors = ["teckc"]
@@ -22,8 +22,8 @@ base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 directories = "6"
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
-fontferry-core = { version = "=0.2.0-alpha.3", path = "crates/fontferry-core" }
-fontferry-platform = { version = "=0.2.0-alpha.3", path = "crates/fontferry-platform" }
+fontferry-core = { version = "=0.2.0-alpha.4", path = "crates/fontferry-core" }
+fontferry-platform = { version = "=0.2.0-alpha.4", path = "crates/fontferry-platform" }
 futures-util = "0.3"
 flate2 = "1"
 fs2 = "0.4"
