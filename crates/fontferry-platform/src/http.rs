@@ -22,6 +22,7 @@ const FONT_AWESOME_RELEASES: &str = "https://api.fontawesome.com/releases";
 #[derive(Clone, Debug)]
 pub struct HttpClient {
     inner: Client,
+    downloads: Client,
 }
 
 #[derive(Clone, Debug)]
@@ -82,27 +83,40 @@ impl ReleaseSource for CachedReleaseSource {
 
 impl HttpClient {
     pub fn new() -> Result<Self> {
-        let policy = Policy::custom(|attempt: Attempt<'_>| {
-            if attempt.previous().len() >= 5 {
-                return attempt.error("too many redirects");
-            }
-            if validate_public_https(attempt.url()).is_err() {
-                return attempt.error("redirect target is not an allowed public HTTPS URL");
-            }
-            attempt.follow()
-        });
         let inner = Client::builder()
-            .redirect(policy)
+            .redirect(redirect_policy())
             .connect_timeout(Duration::from_secs(20))
             .timeout(Duration::from_secs(120))
             .build()
             .map_err(|error| FontFerryError::Network(error.to_string()))?;
-        Ok(Self { inner })
+        let downloads = Client::builder()
+            .redirect(redirect_policy())
+            .connect_timeout(Duration::from_secs(20))
+            .read_timeout(Duration::from_secs(90))
+            .build()
+            .map_err(|error| FontFerryError::Network(error.to_string()))?;
+        Ok(Self { inner, downloads })
     }
 
     pub fn raw(&self) -> &Client {
         &self.inner
     }
+
+    pub(crate) fn download_client(&self) -> &Client {
+        &self.downloads
+    }
+}
+
+fn redirect_policy() -> Policy {
+    Policy::custom(|attempt: Attempt<'_>| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error("too many redirects");
+        }
+        if validate_public_https(attempt.url()).is_err() {
+            return attempt.error("redirect target is not an allowed public HTTPS URL");
+        }
+        attempt.follow()
+    })
 }
 
 #[async_trait]
