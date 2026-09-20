@@ -209,7 +209,100 @@ impl PlatformFontInstaller {
         })
     }
 
+    fn validate_operation(&self, operation: &Operation) -> Result<()> {
+        let invalid = || {
+            FontFerryError::State(
+                "invalid recovery journal invariants; preserve journal and files for manual repair"
+                    .into(),
+            )
+        };
+        let directory = self.system.directory()?;
+        if operation.font_id.is_empty()
+            || operation.version.is_some() == operation.target.is_empty()
+            || operation.old.is_some() != operation.backup.is_some()
+            || operation
+                .old
+                .as_ref()
+                .is_some_and(|old| old.font_id != operation.font_id)
+        {
+            return Err(invalid());
+        }
+        let owned: BTreeSet<_> = operation
+            .old
+            .iter()
+            .flat_map(|old| old.owned_files.iter())
+            .collect();
+        if owned != operation.old_hashes.keys().collect() {
+            return Err(invalid());
+        }
+        for (path, hash) in operation.old_hashes.iter().chain(&operation.target) {
+            if path.parent() != Some(directory.as_path())
+                || path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+                || hash.len() != 64
+                || !hash.bytes().all(|b| b.is_ascii_hexdigit())
+                || !path.file_name().is_some_and(|name| {
+                    name.to_string_lossy()
+                        .starts_with(&format!("{}-", operation.font_id))
+                })
+            {
+                return Err(invalid());
+            }
+        }
+        for (path, hash) in &operation.target {
+            if operation
+                .old_hashes
+                .get(path)
+                .is_some_and(|old| old != hash)
+            {
+                return Err(invalid());
+            }
+        }
+        if let (Some(old), Some(backup)) = (&operation.old, &operation.backup)
+            && (backup.version != old.version
+                || backup.variant_ids != old.variant_ids
+                || old
+                    .previous
+                    .as_ref()
+                    .is_some_and(|previous| previous.backup_directory == backup.backup_directory))
+        {
+            return Err(invalid());
+        }
+        for snapshot in operation
+            .backup
+            .iter()
+            .chain(operation.old.iter().filter_map(|old| old.previous.as_ref()))
+        {
+            let relative = snapshot
+                .backup_directory
+                .strip_prefix(&self.paths.backups)
+                .map_err(|_| invalid())?;
+            if relative.as_os_str().is_empty()
+                || relative
+                    .components()
+                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
+            {
+                return Err(invalid());
+            }
+            let mut current = self.paths.backups.clone();
+            for part in relative.components() {
+                current.push(part);
+                match fs::symlink_metadata(&current) {
+                    Ok(meta) if !meta.is_dir() || meta.file_type().is_symlink() => {
+                        return Err(invalid());
+                    }
+                    Ok(_) => (),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                    Err(error) => return Err(platform_error(error)),
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn resolve(&self, operation: &Operation, committed: bool) -> Result<()> {
+        self.validate_operation(operation)?;
         let old: BTreeSet<_> = operation.old_hashes.keys().cloned().collect();
         let target: BTreeSet<_> = operation.target.keys().cloned().collect();
         let (keep, remove) = if committed {
@@ -217,16 +310,29 @@ impl PlatformFontInstaller {
         } else {
             (&old, &target)
         };
-        // Validate *all* recovery material before changing anything.
+        let obsolete: Vec<_> = remove.difference(keep).cloned().collect();
+        let obsolete_hashes = if committed {
+            &operation.old_hashes
+        } else {
+            &operation.target
+        };
+        // Preflight the entire plan before copies, registration, or deletion. A partial
+        // copy has no verified final hash: keep it and the journal for manual recovery.
+        for path in &obsolete {
+            verify_existing(path, &obsolete_hashes[path])?;
+        }
+        let mut copies = Vec::new();
         if committed {
             for (path, hash) in &operation.target {
-                if file_hash(path)? != *hash {
-                    return Err(FontFerryError::State("committed font is missing or corrupt; preserve journal and backups for repair".into()));
+                if !verify_existing(path, hash)? {
+                    return Err(FontFerryError::State(
+                        "committed font is missing; preserve journal and backups for repair".into(),
+                    ));
                 }
             }
         } else if let Some(snapshot) = &operation.backup {
             for (path, hash) in &operation.old_hashes {
-                if file_hash(path).is_ok_and(|h| h == *hash) {
+                if verify_existing(path, hash)? {
                     continue;
                 }
                 let source =
@@ -235,36 +341,27 @@ impl PlatformFontInstaller {
                         .join(path.file_name().ok_or_else(|| {
                             FontFerryError::State("invalid recovery path".into())
                         })?);
-                if file_hash(&source)? != *hash {
+                if !verify_existing(&source, hash)? {
                     return Err(FontFerryError::State(
-                        "recovery backup is missing or corrupt; preserve current files".into(),
+                        "recovery backup is missing; preserve journal and current files".into(),
                     ));
                 }
+                copies.push((source, path));
             }
-            for (path, hash) in &operation.old_hashes {
-                if file_hash(path).is_ok_and(|h| h == *hash) {
-                    continue;
-                }
-                if path.exists() {
-                    return Err(FontFerryError::State(
-                        "managed file changed outside FontFerry; manual recovery required".into(),
-                    ));
-                }
-                copy_new(
-                    &snapshot
-                        .backup_directory
-                        .join(path.file_name().ok_or_else(|| {
-                            FontFerryError::State("invalid recovery path".into())
-                        })?),
-                    path,
-                )?;
-            }
+        }
+        for (source, path) in copies {
+            copy_new(&source, path)?;
+        }
+        if !committed && operation.backup.is_some() {
             self.system
                 .register(&old.difference(&target).cloned().collect::<Vec<_>>())?;
         }
-        let obsolete: Vec<_> = remove.difference(keep).cloned().collect();
         self.system.unregister(&obsolete)?;
         for path in &obsolete {
+            // Recheck immediately before deletion as well as during the whole-plan preflight.
+            if !verify_existing(path, &obsolete_hashes[path])? {
+                continue;
+            }
             match self.system.remove(path) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -317,6 +414,11 @@ impl FontInstaller for PlatformFontInstaller {
             }
             _ => false,
         };
+        if !committed && installed != operation.old {
+            return Err(FontFerryError::State(
+                "database does not match either journal state; manual recovery required".into(),
+            ));
+        }
         let this = self.clone();
         tokio::task::spawn_blocking(move || this.resolve(&operation, committed))
             .await
@@ -451,6 +553,20 @@ impl FontInstaller for PlatformFontInstaller {
     }
 }
 
+// NotFound is the only benign absence. Symlinks, access errors and changed bytes
+// are never treated as an owned file that can be overwritten or removed.
+fn verify_existing(path: &Path, expected: &str) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(platform_error(error)),
+        Ok(meta) if meta.is_file() && file_hash(path)? == expected => Ok(true),
+        Ok(_) => Err(FontFerryError::State(format!(
+            "file differs from recovery journal: {}; preserve file and journal for manual recovery",
+            path.display()
+        ))),
+    }
+}
+
 fn file_hash(path: &Path) -> Result<String> {
     if !fs::symlink_metadata(path)
         .map_err(platform_error)?
@@ -505,6 +621,26 @@ fn run(command: &mut std::process::Command) -> Result<()> {
     }
 }
 
+#[cfg(any(windows, test))]
+fn remove_session_reference(
+    add: impl FnOnce() -> bool,
+    remove: impl FnOnce() -> Result<usize>,
+) -> Result<()> {
+    if !add() {
+        return Err(FontFerryError::Platform(
+            "could not establish font session reference for unregister; preserve journal and retry"
+                .into(),
+        ));
+    }
+    if remove()? == 0 {
+        return Err(FontFerryError::Platform(
+            "font session removal failed; preserve journal and retry after closing font users"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod platform {
@@ -546,7 +682,8 @@ mod platform {
             let wide = wide_path(path);
             // Registry presence is not evidence that the current session loaded the font.
             // Normalize any references left by a interrupted attempt before adding exactly one.
-            unload_session(&wide)?;
+            unload_session(&wide, 0)?;
+            unload_session(&wide, 0x10)?; // FR_PRIVATE, for legacy resources in this process.
             // SAFETY: `wide` is NUL-terminated and live; flags select the public session.
             let added = unsafe { AddFontResourceExW(wide.as_ptr(), 0, std::ptr::null()) };
             if added == 0 {
@@ -575,13 +712,19 @@ mod platform {
         for path in paths {
             let name = registry_name(path)?;
             let persisted = registry_matches(&key, &name, path)?;
-            // Also remove session-only resources from an interrupted add-before-registry-write.
-            let removed = unload_session(&wide_path(path))?;
-            if removed == 0 && persisted {
-                return Err(FontFerryError::Platform(format!(
-                    "Windows could not unregister {}; keep journal and retry after closing font users or signing out",
-                    path.display()
-                )));
+            let wide = wide_path(path);
+            if path.exists() {
+                // A preceding attempt may have drained GDI but failed deleting the registry
+                // value. Establish one known public reference so a zero initial count is
+                // not confused with an unregister failure on every subsequent retry.
+                super::remove_session_reference(
+                    || unsafe { AddFontResourceExW(wide.as_ptr(), 0, std::ptr::null()) } != 0,
+                    || unload_session(&wide, 0),
+                )?;
+                unload_session(&wide, 0x10)?; // Matching legacy FR_PRIVATE flags.
+            } else {
+                unload_session(&wide, 0)?;
+                unload_session(&wide, 0x10)?;
             }
             if persisted {
                 key.delete_value(name)
@@ -602,12 +745,12 @@ mod platform {
         }
     }
 
-    fn unload_session(wide: &[u16]) -> Result<usize> {
+    fn unload_session(wide: &[u16], flags: u32) -> Result<usize> {
         // Microsoft documents repeated removal when outstanding resource references exist.
         // The cap prevents an externally changing resource count from hanging recovery.
         for removed in 0..1024 {
             // SAFETY: callers supply a live NUL-terminated managed path and matching flags.
-            if unsafe { RemoveFontResourceExW(wide.as_ptr(), 0, std::ptr::null()) } == 0 {
+            if unsafe { RemoveFontResourceExW(wide.as_ptr(), flags, std::ptr::null()) } == 0 {
                 return Ok(removed);
             }
         }
@@ -986,7 +1129,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn second_copy_failure_removes_partial_files_on_recovery() -> TestResult {
+    async fn second_copy_failure_preserves_unverified_partial_file_and_journal() -> TestResult {
         let root = tempfile::tempdir()?;
         let (installer, system, state) = setup(root.path())?;
         let font = definition()?;
@@ -994,8 +1137,14 @@ mod tests {
         let b = prepared(root.path(), "b.ttf", b"b")?;
         system.fail_copy.store(2, Ordering::SeqCst);
         assert!(installer.install(&font, "1", &[a, b], None).await.is_err());
-        installer.recover(&state).await?;
-        assert_eq!(fs::read_dir(&system.root)?.count(), 0);
+        assert!(installer.recover(&state).await.is_err());
+        assert!(installer.journal().exists());
+        assert_eq!(fs::read_dir(&system.root)?.count(), 2);
+        assert!(
+            fs::read_dir(&system.root)?
+                .filter_map(std::result::Result::ok)
+                .any(|entry| fs::read(entry.path()).is_ok_and(|bytes| bytes == b"partial"))
+        );
         assert!(state.get_installed(&font.id).await?.is_none());
         Ok(())
     }
@@ -1050,6 +1199,154 @@ mod tests {
             );
             assert!(first.owned_files.iter().all(|p| p.exists()));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn session_cleanup_can_retry_after_gdi_was_drained_before_registry_failure() -> TestResult {
+        let references = std::cell::Cell::new(0);
+        for _ in 0..2 {
+            remove_session_reference(
+                || {
+                    references.set(references.get() + 1);
+                    true
+                },
+                || Ok(references.replace(0)),
+            )?;
+            assert_eq!(references.get(), 0);
+        }
+        assert!(remove_session_reference(|| true, || Ok(0)).is_err());
+        assert!(remove_session_reference(|| false, || Ok(1)).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_preserves_replaced_obsolete_files_in_both_directions() -> TestResult {
+        for committed in [false, true] {
+            let root = tempfile::tempdir()?;
+            let (installer, system, state) = setup(root.path())?;
+            let font = definition()?;
+            let a = prepared(root.path(), "a.ttf", b"a")?;
+            let first = record(&font, "1", installer.install(&font, "1", &[a], None).await?);
+            state.save_installed(&first).await?;
+            installer.finish(&state).await?;
+            let b = prepared(root.path(), "b.ttf", b"b")?;
+            let next = record(
+                &font,
+                "2",
+                installer.install(&font, "2", &[b], Some(&first)).await?,
+            );
+            if committed {
+                state.save_installed(&next).await?;
+            }
+            let obsolete = if committed {
+                &first.owned_files[0]
+            } else {
+                &next.owned_files[0]
+            };
+            fs::write(obsolete, b"external replacement")?;
+            let before = system.registered.lock().map_err(|e| e.to_string())?.clone();
+            assert!(installer.recover(&state).await.is_err());
+            assert_eq!(fs::read(obsolete)?, b"external replacement");
+            assert_eq!(
+                *system.registered.lock().map_err(|e| e.to_string())?,
+                before
+            );
+            assert!(installer.journal().exists());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_preflights_all_sources_and_destination_conflicts() -> TestResult {
+        for conflict in [false, true] {
+            let root = tempfile::tempdir()?;
+            let (installer, system, state) = setup(root.path())?;
+            let font = definition()?;
+            let a = prepared(root.path(), "a.ttf", b"a")?;
+            let b = prepared(root.path(), "b.ttf", b"b")?;
+            let first = record(
+                &font,
+                "1",
+                installer.install(&font, "1", &[a, b], None).await?,
+            );
+            state.save_installed(&first).await?;
+            installer.finish(&state).await?;
+            installer.uninstall(&first).await?;
+            let operation: Operation = serde_json::from_slice(&fs::read(installer.journal())?)?;
+            let paths: Vec<_> = operation.old_hashes.keys().collect();
+            fs::remove_file(paths[0])?;
+            if conflict {
+                fs::write(paths[1], b"replacement")?;
+            } else {
+                fs::remove_file(paths[1])?;
+                let backup = operation.backup.as_ref().ok_or("missing snapshot")?;
+                fs::write(
+                    backup
+                        .backup_directory
+                        .join(paths[1].file_name().ok_or("missing name")?),
+                    b"corrupt",
+                )?;
+            }
+            let before = system.registered.lock().map_err(|e| e.to_string())?.clone();
+            assert!(installer.recover(&state).await.is_err());
+            assert!(!paths[0].exists());
+            assert_eq!(
+                *system.registered.lock().map_err(|e| e.to_string())?,
+                before
+            );
+            assert!(installer.journal().exists());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_journal_invariants_do_not_mutate_files() -> TestResult {
+        let root = tempfile::tempdir()?;
+        let (installer, _, state) = setup(root.path())?;
+        let font = definition()?;
+        let a = prepared(root.path(), "a.ttf", b"a")?;
+        installer.install(&font, "1", &[a], None).await?;
+        let mut operation: Operation = serde_json::from_slice(&fs::read(installer.journal())?)?;
+        let outside = root.path().join("unmanaged.ttf");
+        fs::write(&outside, b"unmanaged")?;
+        operation
+            .target
+            .insert(outside.clone(), file_hash(&outside)?);
+        fs::write(installer.journal(), serde_json::to_vec(&operation)?)?;
+        assert!(installer.recover(&state).await.is_err());
+        assert_eq!(fs::read(outside)?, b"unmanaged");
+        assert!(installer.journal().exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn recovery_refuses_dangling_symlink_before_restoring_any_file() -> TestResult {
+        let root = tempfile::tempdir()?;
+        let (installer, _, state) = setup(root.path())?;
+        let font = definition()?;
+        let a = prepared(root.path(), "a.ttf", b"a")?;
+        let b = prepared(root.path(), "b.ttf", b"b")?;
+        let first = record(
+            &font,
+            "1",
+            installer.install(&font, "1", &[a, b], None).await?,
+        );
+        state.save_installed(&first).await?;
+        installer.finish(&state).await?;
+        installer.uninstall(&first).await?;
+        for path in &first.owned_files {
+            fs::remove_file(path)?;
+        }
+        std::os::unix::fs::symlink(root.path().join("absent"), &first.owned_files[1])?;
+        assert!(installer.recover(&state).await.is_err());
+        assert!(!first.owned_files[0].exists());
+        assert!(
+            fs::symlink_metadata(&first.owned_files[1])?
+                .file_type()
+                .is_symlink()
+        );
         Ok(())
     }
 

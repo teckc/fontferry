@@ -88,7 +88,8 @@
 
   function openFont(font: FontDefinition) {
     selected = font;
-    selectedVariants = installed(font.id)?.variantIds.slice() ?? font.variants.filter((variant) => variant.default).map((variant) => variant.id);
+    const savedVariants = installed(font.id)?.variantIds;
+    selectedVariants = savedVariants?.length ? savedVariants.slice() : font.variants.filter((variant) => variant.default).map((variant) => variant.id);
     message = "";
     error = "";
     manualVersion = status(font.id)?.currentVersion ?? "";
@@ -254,6 +255,11 @@
       });
       data.scheduleEnabled = scheduleEnabled;
     } catch (cause) {
+      try {
+        data = await invoke<Dashboard>("dashboard");
+      } catch {
+        data.scheduleEnabled = null;
+      }
       error = String(cause);
       scheduleEnabled = data.scheduleEnabled ?? false;
     }
@@ -505,6 +511,7 @@
       <section class="settings">
         <article class="panel">
           <h2>每日检查</h2>
+          {#if data.scheduleEnabled === null}<p role="status">上次计划任务操作未完成，实际状态尚未确认。请选择目标状态并重新保存。</p>{/if}
           <label class="switch-row"><span><strong>每天自动检查字体更新</strong><small>即使字渡没有打开，也会按时检查</small></span><input type="checkbox" bind:checked={scheduleEnabled} /></label>
           <button class="primary" onclick={setSchedule}>保存</button>
         </article>

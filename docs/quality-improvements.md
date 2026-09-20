@@ -71,3 +71,37 @@ Microsoft primary references: [AddFontResourceExW](https://learn.microsoft.com/e
 ## Audit-driven dependency repair
 
 The first Draft PR CI audit failed on [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html) (rustls), [RUSTSEC-2026-0245](https://rustsec.org/advisories/RUSTSEC-2026-0245.html) and [RUSTSEC-2026-0246](https://rustsec.org/advisories/RUSTSEC-2026-0246.html) (sevenz-rust). These are relevant download/extraction dependencies, so they were repaired rather than ignored. The 7z callback still validates original entry paths and enforces the shared budget. A real, tiny 7z archive regression test now covers output limits, cumulative entry limits and path traversal with the replacement decoder. Production enables only the extraction utility feature; compression is a test-only dependency feature used to generate controlled archives.
+
+## Copilot review follow-up
+
+The follow-up merges main `05c54a7` (its dependency-update commits) into the PR without reverting those updates. It preserves the security decoder replacement and locked CI checks. TypeScript alone is restored to the previously validated 5.9.2: main's TypeScript 7.0.2 is explicitly rejected by svelte-check 4.7.6. The pnpm lockfile removes TypeScript 7's native binary packages accordingly. Core now declares the existing workspace tracing dependency to report diagnostic-storage errors.
+
+| Review concern | Implemented response |
+| --- | --- |
+| Special-use IPv4 | Reject all of 192.0.0.0/24 consistently for literal URLs, mapped IPv6 and the DNS-address predicate. This is a conservative application policy, including the .9/.10 anycast exceptions, not a claim that the entire range is RFC1918 space. See the [IANA registry](https://www.iana.org/assignments/iana-ipv4-special-registry/). Tests cover every address in the range. |
+| Replaced obsolete files | Preflight old/target journal hashes and file types before any recovery mutations; recheck before deleting. Replaced files and symlinks retain the journal and return an actionable error. Both commit and compensation directions are tested. |
+| Recovery preflight | The existing code already validated required backups in a separate pass. It now also validates all destinations and obsolete paths before copying. Tests cover a later corrupt backup, later conflicting destination and dangling symlink. |
+| Invalid journals | Validate file-set/record consistency, shared-path hashes, install/uninstall shape, hash syntax, font-directory containment and snapshot paths before recovery mutation. Unknown database states block recovery. This is consistency validation, not authentication against a malicious local account. |
+| Activity failures | Diagnostic persistence cannot change successful install/uninstall/rollback results or replace the primary failure. Tracing reports activity-storage failures. A scheduled re-check failure records its font ID and reason. |
+| Cache message | The warning accurately says metadata is retained for provenance and online freshness is unconfirmed. Network failures still return errors. |
+| Version ordering | Decide semantic-version vs publication-time ordering once for the entire eligible set, avoiding non-transitive pairwise fallback. All six permutations of a mixed-label example select the same release. Opaque tag text is only a deterministic equal-timestamp tie-break. |
+| Legacy variants | Empty legacy records resolve defaults when opening details; a subsequent explicit deselection remains empty and disables installation. Nonempty saved choices remain authoritative. |
+| Scheduler serialization/state | GUI and CLI use one helper and the same OS operation lock as font mutation. A SQLite pending intent is saved before native commands. Any partial command/persistence failure leaves a durable unknown state; settings show that state and allow retry. Success clears the intent only after saving the new state. Tests use real SQLite write-failure triggers and reopen the database. No destructive native scheduler command is run by these tests. |
+| Windows retries | Unregister establishes a known public-session reference before draining it, so an earlier successful GDI removal followed by registry failure does not permanently poison retries. Zero removal after a known add remains an error. Legacy resources in the current process are also drained with matching FR_PRIVATE flags. Injected reference-count tests verify orchestration only; cross-process/font-in-use/sign-in acceptance remains necessary. |
+
+### Conservative recovery of incomplete copies
+
+A failed direct copy can leave bytes that do not match the intended final hash. Such bytes cannot safely be distinguished from an externally replaced file after a crash. Recovery now **preserves the mismatching file and journal**, returns its path, and blocks further font mutation rather than deleting it by assumption. Complete matching additions can still be compensated automatically. This deliberately replaces the earlier test expectation that any partial destination is silently removed.
+
+For manual recovery: close FontFerry/font-using applications, preserve the database, journal and backup directories, inspect the reported path and journal hashes, and move a confirmed conflicting/incomplete file to a separate quarantine location without discarding it. Retry recovery only once the affected paths and recovery material are understood. Do not delete the journal to bypass a failed integrity check. Hash preflight does not provide protection against an adversarial concurrent filesystem writer; the process lock only serializes FontFerry.
+
+### Follow-up verification
+
+- Local Linux: 39 Rust tests passed (14 core, 25 platform), including temporary-directory/SQLite failure recovery and independent-process locking. The Unix-only dangling-symlink test is not a Windows test.
+- Core/platform all-target Clippy with `--locked -- -D warnings`, formatting and `cargo deny check`: passed; no new advisory ignore.
+- pnpm 11.9.0 frozen installation, Svelte check, 6 component tests and production build: passed after the TypeScript compatibility repair.
+- The local default build encountered zero-length object/linker failures. Tests passed in a fresh target directory with `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_CODEGEN_UNITS=1`; the remote CI retains the standard compiler configuration and required gates.
+- Full local Tauri/workspace checks still require unavailable pkg-config/WebKitGTK development dependencies. Local Playwright initially could not launch its absent Chromium; browser installation is retried separately. No local native Windows/macOS behavior is claimed.
+- Updated remote CI evidence is recorded in the PR after pushing this follow-up; earlier successful runs are not evidence for these new changes.
+
+Scheduler intent records expose uncertainty rather than attempt an unsafe automatic task rollback. An explicit retry reapplies the selected target idempotently. External scheduler edits remain outside continuous reconciliation. Neither this change nor the font journal claims power-loss atomicity or native-platform acceptance from mock tests.

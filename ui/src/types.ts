@@ -62,7 +62,7 @@ export interface Activity {
 }
 
 export interface Dashboard {
-  scheduleEnabled?: boolean;
+  scheduleEnabled?: boolean | null;
   fonts: FontDefinition[];
   installed: InstalledFont[];
   statuses: UpdateStatus[];

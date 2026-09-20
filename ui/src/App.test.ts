@@ -79,3 +79,27 @@ test("open font details refresh after installation without reopening", async () 
   await waitFor(() => expect(screen.getByRole("dialog")).not.toHaveTextContent("1.0"));
   expect(screen.getByRole("dialog")).toHaveTextContent("2.0");
 });
+
+
+test("legacy empty variants resolve defaults only when opening details", async () => {
+  const font = { ...catalog.fonts[0], variants: [{ id: "default", name: "默认包", description: "默认", assetPattern: "a", default: true }] };
+  vi.mocked(invoke).mockResolvedValue({ fonts: [font], installed: [{ fontId: font.id, version: "1.0", variantIds: [], previous: null }], statuses: [], activities: [] });
+  render(App);
+  await waitFor(() => expect(screen.queryByText("正在读取字体状态…")).not.toBeInTheDocument());
+  await fireEvent.click(screen.getByRole("button", { name: "Aa字体" }));
+  await fireEvent.click(screen.getByRole("button", { name: new RegExp(font.name) }));
+  const checkbox = screen.getByRole("checkbox", { name: /默认包/ });
+  expect(checkbox).toBeChecked();
+  await fireEvent.click(checkbox);
+  expect(screen.getByRole("button", { name: "安装或更新" })).toBeDisabled();
+});
+
+
+test("pending scheduler operation is displayed as unknown after reload", async () => {
+  vi.mocked(invoke).mockResolvedValue({ fonts: [], installed: [], statuses: [], activities: [], scheduleEnabled: null });
+  render(App);
+  await waitFor(() => expect(screen.queryByText("正在读取字体状态…")).not.toBeInTheDocument());
+  await fireEvent.click(screen.getByRole("button", { name: "⚙设置" }));
+  expect(screen.getByRole("status")).toHaveTextContent("实际状态尚未确认");
+  expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+});

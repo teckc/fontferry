@@ -148,20 +148,12 @@ pub(super) async fn run_cli(command: CliCommand) -> Result<()> {
         }
         CliCommand::Schedule(arguments) => {
             let _enable_requested = arguments.enable;
-            if arguments.disable {
-                let result = remove_daily_schedule()?;
-                state
-                    .state
-                    .set_setting("schedule-enabled", &result.enabled)?;
-                println!("{result:?}");
-            } else {
-                let executable = std::env::current_exe().context("locate executable")?;
-                let result = install_daily_schedule(&executable)?;
-                state
-                    .state
-                    .set_setting("schedule-enabled", &result.enabled)?;
-                println!("{result:?}");
-            }
+            let executable = std::env::current_exe().context("locate executable")?;
+            let result = tokio::task::spawn_blocking(move || {
+                update_daily_schedule(&state.engine, &state.state, &executable, !arguments.disable)
+            })
+            .await??;
+            println!("{result:?}");
         }
     }
     Ok(())

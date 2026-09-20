@@ -30,11 +30,7 @@ pub(super) async fn dashboard(
         installed,
         statuses,
         activities,
-        schedule_enabled: state
-            .state
-            .get_setting("schedule-enabled")
-            .map_err(|e| e.to_string())?
-            .unwrap_or(false),
+        schedule_enabled: saved_schedule_state(&state.state).map_err(|e| e.to_string())?,
     })
 }
 
@@ -199,20 +195,15 @@ pub(super) async fn set_schedule(
     input: ScheduleInput,
     state: State<'_, AppState>,
 ) -> std::result::Result<String, String> {
+    let engine = state.engine.clone();
+    let repository = state.state.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        if input.enabled {
-            let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-            install_daily_schedule(&executable).map_err(|e| e.to_string())
-        } else {
-            remove_daily_schedule().map_err(|e| e.to_string())
-        }
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        update_daily_schedule(&engine, &repository, &executable, input.enabled)
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())??;
-    state
-        .state
-        .set_setting("schedule-enabled", &result.enabled)
-        .map_err(|e| e.to_string())?;
     Ok(if result.enabled {
         "每日检查已启用"
     } else {

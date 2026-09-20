@@ -12,8 +12,8 @@ use fontferry_core::{
 };
 use fontferry_platform::{
     AppPaths, CachedReleaseSource, CatalogVerifier, HttpClient, PlatformFontInstaller,
-    SafeFontPreparer, SqliteState, install_daily_schedule, load_embedded_or_cached,
-    refresh_signed_catalog, remove_daily_schedule, scan_font_awesome,
+    SafeFontPreparer, SqliteState, load_embedded_or_cached, refresh_signed_catalog,
+    saved_schedule_state, scan_font_awesome, update_daily_schedule,
 };
 use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
@@ -53,7 +53,7 @@ struct Dashboard {
     installed: Vec<InstalledFont>,
     statuses: Vec<UpdateStatus>,
     activities: Vec<fontferry_core::Activity>,
-    schedule_enabled: bool,
+    schedule_enabled: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

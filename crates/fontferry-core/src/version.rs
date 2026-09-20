@@ -32,10 +32,24 @@ pub fn select_latest<'a>(
     channel: ReleaseChannel,
     policy: &VersionPolicy,
 ) -> Option<&'a Release> {
-    releases
+    let eligible: Vec<_> = releases
         .iter()
         .filter(|release| release_eligible(release, channel, policy))
-        .max_by(|left, right| compare_releases(left, right))
+        .collect();
+    // Select one ordering for the whole set; pairwise fallback is non-transitive.
+    let numeric = eligible
+        .iter()
+        .all(|release| parse_version(&release.version).is_some());
+    eligible.into_iter().max_by(|left, right| {
+        let version_order = if numeric {
+            compare_versions(&left.version, &right.version).unwrap_or(Ordering::Equal)
+        } else {
+            Ordering::Equal
+        };
+        version_order.then_with(|| left.published_at.cmp(&right.published_at))
+            // Deterministic tie-break only, not a claim of opaque version precedence.
+            .then_with(|| left.version.cmp(&right.version))
+    })
 }
 
 #[must_use]
@@ -61,15 +75,6 @@ pub fn release_eligible(
 #[must_use]
 pub fn is_update_available(current: &str, available: &str) -> bool {
     compare_versions(available, current) == Some(Ordering::Greater)
-}
-
-fn compare_releases(left: &Release, right: &Release) -> Ordering {
-    let version_order = compare_versions(&left.version, &right.version);
-    if version_order.is_none() || version_order == Some(Ordering::Equal) {
-        left.published_at.cmp(&right.published_at)
-    } else {
-        version_order.unwrap_or(Ordering::Equal)
-    }
 }
 
 #[must_use]
@@ -172,6 +177,30 @@ mod tests {
         ];
         let selected = select_latest(&releases, ReleaseChannel::Stable, &VersionPolicy::default());
         assert_eq!(selected.map(|item| item.version.as_str()), Some("1.0.0"));
+    }
+
+    #[test]
+    fn mixed_release_selection_is_invariant_under_permutation() {
+        let candidates = [
+            release("2.0", datetime!(2026-01-01 0:00 UTC), false),
+            release("custom", datetime!(2026-02-01 0:00 UTC), false),
+            release("1.0", datetime!(2026-03-01 0:00 UTC), false),
+        ];
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            let releases: Vec<_> = order.iter().map(|i| candidates[*i].clone()).collect();
+            assert_eq!(
+                select_latest(&releases, ReleaseChannel::Stable, &VersionPolicy::default())
+                    .map(|r| r.version.as_str()),
+                Some("1.0")
+            );
+        }
     }
 
     #[test]

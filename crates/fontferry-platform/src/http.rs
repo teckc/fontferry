@@ -70,7 +70,7 @@ impl ReleaseSource for CachedReleaseSource {
                     tracing::warn!(
                         font_id = %font.id,
                         checked_at = %cached.checked_at,
-                        "network check failed; using cached release metadata"
+                        "network check failed; cached metadata retained for provenance only; freshness is unconfirmed"
                     );
                     Err(FontFerryError::Network(format!(
                         "在线检查失败；缓存日期 {}，无法确认是否最新",
@@ -345,6 +345,8 @@ fn public_address(address: IpAddr) -> bool {
                 || ip.is_multicast()
                 || ip.octets()[0] == 0
                 || ip.octets()[0] >= 240
+                // Conservatively exclude IETF protocol assignments, including anycast exceptions.
+                || ip.octets()[..3] == [192, 0, 0]
                 || (ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]))
                 || (ip.octets()[0] == 198 && (18..=19).contains(&ip.octets()[1])))
         }
@@ -452,6 +454,19 @@ struct FontAwesomeRelease {
 mod tests {
     use super::*;
     #[test]
+    fn protocol_assignment_range_is_rejected_for_literal_and_resolved_addresses()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for last in 0..=255 {
+            let ip = std::net::Ipv4Addr::new(192, 0, 0, last);
+            assert!(!public_address(IpAddr::V4(ip))); // Predicate used on DNS answers.
+            assert!(!public_address(IpAddr::V6(ip.to_ipv6_mapped())));
+            assert!(validate_public_https(&Url::parse(&format!("https://{ip}"))?).is_err());
+        }
+        assert!(validate_public_https(&Url::parse("https://1.1.1.1")?).is_ok());
+        Ok(())
+    }
+
+    #[test]
     fn rejects_local_ipv4_ipv6_mapped_addresses_and_credentials()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
         for url in [
@@ -459,6 +474,9 @@ mod tests {
             "https://127.0.0.1",
             "https://10.0.0.1",
             "https://169.254.0.1",
+            "https://192.0.0.1",
+            "https://192.0.0.9",
+            "https://[::ffff:192.0.0.1]",
             "https://[::1]",
             "https://[::ffff:127.0.0.1]",
             "https://[fc00::1]",

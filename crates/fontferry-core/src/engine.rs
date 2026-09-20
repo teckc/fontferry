@@ -160,12 +160,12 @@ impl FontEngine {
         let result = self.install_inner(request).await;
         match result {
             Ok(value) => {
-                self.activity(
+                self.report_activity(
                     Some(font_id),
                     ActivityLevel::Info,
                     "install completed".into(),
                 )
-                .await?;
+                .await;
                 Ok(value)
             }
             Err(error) => {
@@ -175,7 +175,8 @@ impl FontEngine {
                         "{error}; recovery incomplete: {recovery}; retain journal and backups, then restart"
                     ),
                 };
-                self.record_failure(&font_id, &message).await?;
+                self.report_activity(Some(font_id.clone()), ActivityLevel::Error, message.clone())
+                    .await;
                 Err(FontFerryError::State(message))
             }
         }
@@ -245,20 +246,20 @@ impl FontEngine {
             .install(&font, &release.version, &prepared, previous.as_ref())
             .await?;
         for warning in &outcome.warnings {
-            self.activity(
+            self.report_activity(
                 Some(font.id.clone()),
                 ActivityLevel::Warning,
                 warning.clone(),
             )
-            .await?;
+            .await;
         }
         if outcome.restart_recommended {
-            self.activity(
+            self.report_activity(
                 Some(font.id.clone()),
                 ActivityLevel::Warning,
                 "请重新启动使用字体的应用，使新字体生效".into(),
             )
-            .await?;
+            .await;
         }
         let installed = InstalledFont {
             font_id: font.id.clone(),
@@ -271,13 +272,12 @@ impl FontEngine {
         };
         self.state.save_installed(&installed).await?;
         self.installer.finish(self.state.as_ref()).await?;
-        let _activity_result = self
-            .activity(
-                Some(font.id),
-                ActivityLevel::Info,
-                format!("Installed {}", release.version),
-            )
-            .await;
+        self.report_activity(
+            Some(font.id),
+            ActivityLevel::Info,
+            format!("Installed {}", release.version),
+        )
+        .await;
         Ok(installed)
     }
 
@@ -289,7 +289,18 @@ impl FontEngine {
         let Some(current) = self.state.get_installed(font_id).await? else {
             return Ok(None);
         };
-        let status = self.check_font(font_id).await?;
+        let status = match self.check_font(font_id).await {
+            Ok(status) => status,
+            Err(error) => {
+                self.report_activity(
+                    Some(font_id.into()),
+                    ActivityLevel::Error,
+                    error.to_string(),
+                )
+                .await;
+                return Err(error);
+            }
+        };
         if !status.update_available {
             return Ok(None);
         }
@@ -319,7 +330,8 @@ impl FontEngine {
                     Ok(()) => error.to_string(),
                     Err(recovery) => format!("{error}; recovery incomplete: {recovery}"),
                 };
-                self.record_failure(font_id, &message).await?;
+                self.report_activity(Some(font_id.into()), ActivityLevel::Error, message.clone())
+                    .await;
                 Err(FontFerryError::State(message))
             }
         }
@@ -333,12 +345,12 @@ impl FontEngine {
         let result = self.uninstall_inner(font_id).await;
         match result {
             Ok(value) => {
-                self.activity(
+                self.report_activity(
                     Some(operation_font_id),
                     ActivityLevel::Info,
                     "uninstall completed".into(),
                 )
-                .await?;
+                .await;
                 Ok(value)
             }
             Err(error) => {
@@ -348,7 +360,12 @@ impl FontEngine {
                         "{error}; recovery incomplete: {recovery}; retain journal and backups, then restart"
                     ),
                 };
-                self.record_failure(&operation_font_id, &message).await?;
+                self.report_activity(
+                    Some(operation_font_id),
+                    ActivityLevel::Error,
+                    message.clone(),
+                )
+                .await;
                 Err(FontFerryError::State(message))
             }
         }
@@ -371,12 +388,12 @@ impl FontEngine {
         let result = self.rollback_inner(font_id).await;
         match result {
             Ok(value) => {
-                self.activity(
+                self.report_activity(
                     Some(operation_font_id),
                     ActivityLevel::Info,
                     "rollback completed".into(),
                 )
-                .await?;
+                .await;
                 Ok(value)
             }
             Err(error) => {
@@ -386,7 +403,12 @@ impl FontEngine {
                         "{error}; recovery incomplete: {recovery}; retain journal and backups, then restart"
                     ),
                 };
-                self.record_failure(&operation_font_id, &message).await?;
+                self.report_activity(
+                    Some(operation_font_id),
+                    ActivityLevel::Error,
+                    message.clone(),
+                )
+                .await;
                 Err(FontFerryError::State(message))
             }
         }
@@ -442,6 +464,18 @@ impl FontEngine {
             message.to_owned(),
         )
         .await
+    }
+
+    // Activity persistence is diagnostic, never the commit authority for font operations.
+    async fn report_activity(
+        &self,
+        font_id: Option<String>,
+        level: ActivityLevel,
+        message: String,
+    ) {
+        if let Err(error) = self.activity(font_id.clone(), level, message).await {
+            tracing::error!(font_id = ?font_id, error = %error, "activity persistence failed; operation result is unchanged");
+        }
     }
 
     async fn activity(
@@ -605,12 +639,22 @@ mod tests {
             _snapshot: &RollbackSnapshot,
             _current: &InstalledFont,
         ) -> Result<InstallOutcome> {
-            Err(FontFerryError::NoRollbackSnapshot)
+            Ok(InstallOutcome {
+                owned_files: vec![PathBuf::from("restored.ttf")],
+                previous_snapshot: None,
+                restart_recommended: false,
+                warnings: Vec::new(),
+            })
         }
     }
 
+    #[derive(Default)]
     struct FailingState {
         observed: Option<ObservedFont>,
+        installed: Mutex<Option<InstalledFont>>,
+        fail_commit: bool,
+        fail_activity: bool,
+        activities: Mutex<Vec<Activity>>,
     }
 
     #[async_trait]
@@ -620,14 +664,19 @@ mod tests {
         }
 
         async fn get_installed(&self, _font_id: &str) -> Result<Option<InstalledFont>> {
-            Ok(None)
+            Ok(self.installed.lock().await.clone())
         }
 
-        async fn save_installed(&self, _installed: &InstalledFont) -> Result<()> {
-            Err(FontFerryError::State("injected commit failure".into()))
+        async fn save_installed(&self, installed: &InstalledFont) -> Result<()> {
+            if self.fail_commit {
+                return Err(FontFerryError::State("injected commit failure".into()));
+            }
+            *self.installed.lock().await = Some(installed.clone());
+            Ok(())
         }
 
         async fn remove_installed(&self, _font_id: &str) -> Result<()> {
+            *self.installed.lock().await = None;
             Ok(())
         }
 
@@ -639,7 +688,11 @@ mod tests {
             Ok(())
         }
 
-        async fn append_activity(&self, _activity: &Activity) -> Result<()> {
+        async fn append_activity(&self, activity: &Activity) -> Result<()> {
+            if self.fail_activity {
+                return Err(FontFerryError::State("injected activity failure".into()));
+            }
+            self.activities.lock().await.push(activity.clone());
             Ok(())
         }
 
@@ -693,7 +746,11 @@ mod tests {
             Arc::new(TrackingInstaller {
                 uninstall_count: uninstall_count.clone(),
             }),
-            Arc::new(FailingState { observed: None }),
+            Arc::new(FailingState {
+                observed: None,
+                fail_commit: true,
+                ..Default::default()
+            }),
             staging.path().to_path_buf(),
         );
         let result = engine
@@ -729,6 +786,7 @@ mod tests {
                     observed_files: vec![PathBuf::from("observed.ttf")],
                     scanned_at: datetime!(2026-01-01 0:00 UTC),
                 }),
+                ..Default::default()
             }),
             staging.path().to_path_buf(),
         );
@@ -737,6 +795,97 @@ mod tests {
         assert_eq!(status.available_version.as_deref(), Some("2.0.0"));
         assert!(status.update_available);
         assert_eq!(status.delivery_policy, DeliveryPolicy::NotifyOnly);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn activity_failure_does_not_change_committed_operation_results()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let staging = tempfile::tempdir()?;
+        let state = Arc::new(FailingState {
+            fail_activity: true,
+            ..Default::default()
+        });
+        let engine = FontEngine::new(
+            vec![font(DeliveryPolicy::AutoInstall)?],
+            Arc::new(StaticReleases),
+            Arc::new(EmptyArtifact),
+            Arc::new(PreparedArtifact),
+            Arc::new(TrackingInstaller {
+                uninstall_count: Arc::new(AtomicUsize::new(0)),
+            }),
+            state.clone(),
+            staging.path().into(),
+        );
+        let installed = engine
+            .install(InstallRequest {
+                font_id: "test-font".into(),
+                version: None,
+                variant_ids: vec![],
+                accept_license: false,
+            })
+            .await?;
+        assert_eq!(
+            state.get_installed("test-font").await?,
+            Some(installed.clone())
+        );
+        let mut with_backup = installed;
+        with_backup.previous = Some(RollbackSnapshot {
+            version: "1.0.0".into(),
+            variant_ids: vec![],
+            backup_directory: staging.path().join("snapshot"),
+        });
+        state.save_installed(&with_backup).await?;
+        let restored = engine.rollback("test-font").await?;
+        assert_eq!(restored.version, "1.0.0");
+        assert_eq!(state.get_installed("test-font").await?, Some(restored));
+        engine.uninstall("test-font").await?;
+        assert!(state.get_installed("test-font").await?.is_none());
+        Ok(())
+    }
+
+    struct OfflineReleases;
+    #[async_trait]
+    impl ReleaseSource for OfflineReleases {
+        async fn releases(&self, _: &FontDefinition, _: &VersionProvider) -> Result<Vec<Release>> {
+            Err(FontFerryError::Network("injected offline check".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn scheduled_recheck_failure_is_recorded_with_font_and_reason()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let staging = tempfile::tempdir()?;
+        let state = Arc::new(FailingState::default());
+        state
+            .save_installed(&InstalledFont {
+                font_id: "test-font".into(),
+                version: "1.0".into(),
+                variant_ids: vec![],
+                owned_files: vec![],
+                previous: None,
+                manual_version: None,
+                installed_at: datetime!(2026-01-01 0:00 UTC),
+            })
+            .await?;
+        let engine = FontEngine::new(
+            vec![font(DeliveryPolicy::AutoInstall)?],
+            Arc::new(OfflineReleases),
+            Arc::new(EmptyArtifact),
+            Arc::new(PreparedArtifact),
+            Arc::new(TrackingInstaller {
+                uninstall_count: Arc::new(AtomicUsize::new(0)),
+            }),
+            state.clone(),
+            staging.path().into(),
+        );
+        assert!(engine.update_installed("test-font").await.is_err());
+        let activities = state.activities.lock().await;
+        assert!(
+            activities
+                .iter()
+                .any(|a| a.font_id.as_deref() == Some("test-font")
+                    && a.message.contains("injected offline check"))
+        );
         Ok(())
     }
 }
