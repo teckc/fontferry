@@ -547,4 +547,4 @@
   </main>
 </div>
 
-<FontDetails bind:selected bind:selectedVariants bind:manualVersion {operation} {installed} {status} {toggleVariant} {check} {install} {remove} {rollback} {saveManualVersion} />
+<FontDetails bind:selected bind:selectedVariants bind:manualVersion {operation} installedFonts={data.installed} statuses={data.statuses} {toggleVariant} {check} {install} {remove} {rollback} {saveManualVersion} />

@@ -5,14 +5,16 @@
   export let selectedVariants: string[];
   export let manualVersion: string;
   export let operation: Operation | null;
-  export let installed: (id: string) => InstalledFont | undefined;
-  export let status: (id: string) => UpdateStatus | undefined;
+  export let installedFonts: InstalledFont[];
+  export let statuses: UpdateStatus[];
   export let toggleVariant: (id: string) => void;
   export let check: (id: string) => Promise<void>;
   export let install: (font: FontDefinition) => Promise<void>;
   export let remove: (font: FontDefinition) => Promise<void>;
   export let rollback: (font: FontDefinition) => Promise<void>;
   export let saveManualVersion: (font: FontDefinition) => Promise<void>;
+  $: current = installedFonts.find((item) => item.fontId === selected?.id);
+  $: update = statuses.find((item) => item.fontId === selected?.id);
 </script>
 
 {#if selected}
@@ -23,13 +25,13 @@
       <h1>{selected.name}</h1>
       <p class="lead">{selected.description}</p>
       <div class="detail-grid">
-        <div><small>当前版本</small><strong>{installed(selected.id)?.version ?? "未安装"}</strong></div>
-        <div><small>最新版本</small><strong>{status(selected.id)?.availableVersion ?? "尚未检查"}</strong></div>
+        <div><small>当前版本</small><strong>{current?.manualVersion ?? current?.version ?? update?.currentVersion ?? "未安装"}</strong></div>
+        <div><small>最新版本</small><strong>{update?.availableVersion ?? "尚未检查"}</strong></div>
         <div><small>更新方式</small><strong>{selected.deliveryPolicy === "autoInstall" ? "字渡可安装" : "只提醒"}</strong></div>
         <div><small>许可证</small><strong>{selected.license.spdx ?? "商业/自定义"}</strong></div>
       </div>
-      {#if status(selected.id)?.fromCache}
-        <p class="muted">缓存的远程版本信息；{status(selected.id)?.checkedAt ? `检查时间：${new Date(status(selected.id)!.checkedAt!).toLocaleString()}` : "检查时间未知"}。本地安装状态已刷新。</p>
+      {#if update?.fromCache}
+        <p class="muted">缓存的远程版本信息；{update?.checkedAt ? `检查时间：${new Date(update!.checkedAt!).toLocaleString()}` : "检查时间未知"}。本地安装状态已刷新。</p>
       {/if}
       {#if selected.variants.length}
         <h3>选择字体包</h3>
@@ -64,9 +66,9 @@
           <a class="primary link" href={selected.homepage} target="_blank" rel="noreferrer">前往官方渠道</a>
         {/if}
       </div>
-      {#if installed(selected.id)}
+      {#if current}
         <div class="danger-zone">
-          {#if installed(selected.id)?.previous}<button onclick={() => rollback(selected!)}>恢复上一版本</button>{/if}
+          {#if current?.previous}<button onclick={() => rollback(selected!)}>恢复上一版本</button>{/if}
           <button onclick={() => remove(selected!)}>卸载</button>
         </div>
       {/if}

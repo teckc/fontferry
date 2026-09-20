@@ -57,3 +57,25 @@ test("failed schedule change restores persisted checkbox state", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("scheduler unavailable");
   expect(checkbox).not.toBeChecked();
 });
+
+test("open font details refresh after installation without reopening", async () => {
+  const font = catalog.fonts[0];
+  let version = "1.0";
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "install_font") { version = "2.0"; return undefined; }
+    return {
+      fonts: [font],
+      installed: [{ fontId: font.id, version, variantIds: [font.variants[0].id], previous: null }],
+      statuses: [{ fontId: font.id, currentVersion: version, availableVersion: "2.0", updateAvailable: version !== "2.0", deliveryPolicy: "autoInstall" }],
+      activities: [],
+    };
+  });
+  render(App);
+  await waitFor(() => expect(screen.queryByText("正在读取字体状态…")).not.toBeInTheDocument());
+  await fireEvent.click(screen.getByRole("button", { name: "Aa字体" }));
+  await fireEvent.click(screen.getByRole("button", { name: new RegExp(font.name) }));
+  expect(screen.getByRole("dialog")).toHaveTextContent("1.0");
+  await fireEvent.click(screen.getByRole("button", { name: "安装或更新" }));
+  await waitFor(() => expect(screen.getByRole("dialog")).not.toHaveTextContent("1.0"));
+  expect(screen.getByRole("dialog")).toHaveTextContent("2.0");
+});
