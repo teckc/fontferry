@@ -69,7 +69,7 @@ jobs:
           }
       - name: Build signed updater artifacts and bundles
         shell: bash
-        run: pnpm tauri build --config apps/fontferry/src-tauri/tauri.conf.json --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}"
+        run: pnpm tauri build --config apps/fontferry/src-tauri/tauri.conf.json --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}" -- --locked
       - name: Index distributable bundle checksums
         shell: bash
         run: |
