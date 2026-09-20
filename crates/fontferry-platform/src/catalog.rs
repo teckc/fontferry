@@ -73,36 +73,25 @@ pub async fn refresh_signed_catalog(
 ) -> Result<Catalog> {
     validate_public_https(catalog_url)?;
     validate_public_https(signature_url)?;
-    let body = client
+    let response = client
         .raw()
         .get(catalog_url.clone())
         .send()
         .await
-        .map_err(|error| FontFerryError::Network(error.to_string()))?
+        .map_err(|e| FontFerryError::Network(e.without_url().to_string()))?
         .error_for_status()
-        .map_err(|error| FontFerryError::Network(error.to_string()))?
-        .bytes()
-        .await
-        .map_err(|error| FontFerryError::Network(error.to_string()))?;
-    if body.len() > MAX_CATALOG_BYTES {
-        return Err(FontFerryError::InvalidCatalog(
-            "remote catalog exceeds 5 MiB".into(),
-        ));
-    }
-    let signature = client
+        .map_err(|e| FontFerryError::Network(e.without_url().to_string()))?;
+    let body = crate::http::bounded_body(response, MAX_CATALOG_BYTES).await?;
+    let response = client
         .raw()
         .get(signature_url.clone())
         .send()
         .await
-        .map_err(|error| FontFerryError::Network(error.to_string()))?
+        .map_err(|e| FontFerryError::Network(e.without_url().to_string()))?
         .error_for_status()
-        .map_err(|error| FontFerryError::Network(error.to_string()))?
-        .text()
-        .await
-        .map_err(|error| FontFerryError::Network(error.to_string()))?;
-    if signature.len() > 1024 {
-        return Err(FontFerryError::InvalidCatalogSignature);
-    }
+        .map_err(|e| FontFerryError::Network(e.without_url().to_string()))?;
+    let signature = String::from_utf8(crate::http::bounded_body(response, 1024).await?)
+        .map_err(|_| FontFerryError::InvalidCatalogSignature)?;
     let catalog = verifier.verify(&body, &signature)?;
     write_atomic(cached_body, &body)?;
     write_atomic(cached_signature, signature.as_bytes())?;

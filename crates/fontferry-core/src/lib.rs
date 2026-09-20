@@ -3,6 +3,7 @@
 pub mod catalog;
 pub mod engine;
 pub mod error;
+mod operation;
 pub mod ports;
 pub mod version;
 

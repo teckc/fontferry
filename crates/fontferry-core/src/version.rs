@@ -32,52 +32,101 @@ pub fn select_latest<'a>(
     channel: ReleaseChannel,
     policy: &VersionPolicy,
 ) -> Option<&'a Release> {
-    releases
+    let eligible: Vec<_> = releases
         .iter()
-        .filter(|release| channel == ReleaseChannel::Prerelease || !release.prerelease)
-        .filter(|release| {
-            policy
-                .updates_through
-                .is_none_or(|date| release.published_at.date() <= date)
+        .filter(|release| release_eligible(release, channel, policy))
+        .collect();
+    // Select one ordering for the whole set; pairwise fallback is non-transitive.
+    let numeric = eligible
+        .iter()
+        .all(|release| parse_version(&release.version).is_some());
+    eligible.into_iter().max_by(|left, right| {
+        let version_order = if numeric {
+            compare_versions(&left.version, &right.version).unwrap_or(Ordering::Equal)
+        } else {
+            Ordering::Equal
+        };
+        version_order.then_with(|| left.published_at.cmp(&right.published_at))
+            // Deterministic tie-break only, not a claim of opaque version precedence.
+            .then_with(|| left.version.cmp(&right.version))
+    })
+}
+
+#[must_use]
+pub fn release_eligible(
+    release: &Release,
+    channel: ReleaseChannel,
+    policy: &VersionPolicy,
+) -> bool {
+    (channel == ReleaseChannel::Prerelease
+        || (!release.prerelease
+            && parse_version(&release.version).is_none_or(|v| v.pre.is_empty())))
+        && policy
+            .updates_through
+            .is_none_or(|date| release.published_at.date() <= date)
+        && policy
+            .major
+            .is_none_or(|major| parse_version(&release.version).is_some_and(|v| v.major == major))
+        && policy.maximum_version.as_ref().is_none_or(|maximum| {
+            compare_versions(&release.version, maximum).is_some_and(|o| o != Ordering::Greater)
         })
-        .filter(|release| {
-            policy.major.is_none_or(|major| {
-                parse_version(&release.version).is_some_and(|version| version.major == major)
-            })
-        })
-        .filter(|release| {
-            policy.maximum_version.as_ref().is_none_or(|maximum| {
-                compare_versions(&release.version, maximum) != Ordering::Greater
-            })
-        })
-        .max_by(|left, right| compare_releases(left, right))
 }
 
 #[must_use]
 pub fn is_update_available(current: &str, available: &str) -> bool {
-    compare_versions(available, current) == Ordering::Greater
-}
-
-fn compare_releases(left: &Release, right: &Release) -> Ordering {
-    let version_order = compare_versions(&left.version, &right.version);
-    if version_order == Ordering::Equal {
-        left.published_at.cmp(&right.published_at)
-    } else {
-        version_order
-    }
+    compare_versions(available, current) == Some(Ordering::Greater)
 }
 
 #[must_use]
-pub fn compare_versions(left: &str, right: &str) -> Ordering {
+pub fn compare_versions(left: &str, right: &str) -> Option<Ordering> {
     match (parse_version(left), parse_version(right)) {
-        (Some(left), Some(right)) => left.cmp(&right),
-        _ => left.cmp(right),
+        (Some(left), Some(right)) => Some(left.cmp(&right)),
+        _ if left == right => Some(Ordering::Equal),
+        _ => None,
     }
 }
 
 #[must_use]
 pub fn parse_version(value: &str) -> Option<Version> {
-    Version::parse(value.trim().trim_start_matches(['v', 'V'])).ok()
+    let value = value
+        .trim()
+        .strip_prefix(['v', 'V'])
+        .unwrap_or(value.trim());
+    if let Ok(version) = Version::parse(value) {
+        return Some(version);
+    }
+    let numeric = value.strip_suffix('R').unwrap_or(value);
+    let parts: Vec<_> = numeric.split('.').collect();
+    if (parts.len() == 2 || parts.len() == 3)
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Some(Version::new(
+            parts[0].parse().ok()?,
+            parts[1].parse().ok()?,
+            if parts.len() == 3 {
+                parts[2].parse().ok()?
+            } else {
+                0
+            },
+        ));
+    }
+    // Date tags sort chronologically. Calendar validation prevents accepting arbitrary labels.
+    let date = value.strip_prefix("release-").unwrap_or(value);
+    let parts: Vec<_> = date.split('-').collect();
+    if parts.len() == 3 && parts[0].len() == 4 {
+        let year: i32 = parts[0].parse().ok()?;
+        let month: u8 = parts[1].parse().ok()?;
+        let day: u8 = parts[2].parse().ok()?;
+        Date::from_calendar_date(year, time::Month::try_from(month).ok()?, day).ok()?;
+        return Some(Version::new(
+            year.try_into().ok()?,
+            month.into(),
+            day.into(),
+        ));
+    }
+    None
 }
 
 #[must_use]
@@ -131,7 +180,46 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_lexical_for_non_semver_versions() {
-        assert!(is_update_available("release-2025-12", "release-2026-01"));
+    fn mixed_release_selection_is_invariant_under_permutation() {
+        let candidates = [
+            release("2.0", datetime!(2026-01-01 0:00 UTC), false),
+            release("custom", datetime!(2026-02-01 0:00 UTC), false),
+            release("1.0", datetime!(2026-03-01 0:00 UTC), false),
+        ];
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            let releases: Vec<_> = order.iter().map(|i| candidates[*i].clone()).collect();
+            assert_eq!(
+                select_latest(&releases, ReleaseChannel::Stable, &VersionPolicy::default())
+                    .map(|r| r.version.as_str()),
+                Some("1.0")
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_to_order_unknown_labels() {
+        assert_eq!(compare_versions("custom-z", "custom-a"), None);
+        assert!(!is_update_available("custom-z", "custom-a"));
+    }
+
+    #[test]
+    fn compares_numeric_and_date_versions() {
+        for (old, new) in [
+            ("1.9", "1.10"),
+            ("v1.9", "v1.10"),
+            ("2.004R", "2.005R"),
+            ("v0.108", "v0.210"),
+            ("1.0.0-beta.1", "1.0.0"),
+            ("2025-12-31", "2026-01-01"),
+        ] {
+            assert!(is_update_available(old, new));
+        }
     }
 }

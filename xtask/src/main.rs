@@ -47,12 +47,13 @@ fn main() -> Result<()> {
                     "clippy",
                     "--workspace",
                     "--all-targets",
+                    "--locked",
                     "--",
                     "-D",
                     "warnings",
                 ],
             )?;
-            run("cargo", &["test", "--workspace"])?;
+            run("cargo", &["test", "--workspace", "--locked"])?;
             run(pnpm, &["check"])?;
             run(pnpm, &["test"])?;
             run(pnpm, &["build"])

@@ -37,6 +37,7 @@ impl FontPreparer for SafeFontPreparer {
 fn prepare_sync(downloaded: &[PathBuf], staging_directory: &Path) -> Result<Vec<PreparedFont>> {
     let extracted = staging_directory.join("extracted");
     fs::create_dir_all(&extracted).map_err(|error| FontFerryError::State(error.to_string()))?;
+    let mut budget = ExtractionBudget::new(MAX_EXTRACTED_BYTES, MAX_ARCHIVE_ENTRIES);
     for (index, path) in downloaded.iter().enumerate() {
         let destination = extracted.join(index.to_string());
         fs::create_dir_all(&destination)
@@ -50,15 +51,17 @@ fn prepare_sync(downloaded: &[PathBuf], staging_directory: &Path) -> Result<Vec<
             let filename = path
                 .file_name()
                 .ok_or_else(|| FontFerryError::FontRejected("font has no filename".into()))?;
-            fs::copy(path, destination.join(filename))
-                .map_err(|error| FontFerryError::State(error.to_string()))?;
+            budget.entry()?;
+            budget.copy(
+                &mut File::open(path).map_err(archive_error)?,
+                &mut File::create(destination.join(filename)).map_err(archive_error)?,
+            )?;
         } else if lower.ends_with(".zip") {
-            extract_zip(path, &destination)?;
+            extract_zip(path, &destination, &mut budget)?;
         } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
-            extract_tar_gz(path, &destination)?;
+            extract_tar_gz(path, &destination, &mut budget)?;
         } else if lower.ends_with(".7z") {
-            sevenz_rust::decompress_file(path, &destination)
-                .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
+            extract_7z(path, &destination, &mut budget)?;
         } else {
             return Err(FontFerryError::ArchiveRejected(format!(
                 "unsupported file '{}'",
@@ -83,7 +86,34 @@ fn prepare_sync(downloaded: &[PathBuf], staging_directory: &Path) -> Result<Vec<
     Ok(prepared)
 }
 
-fn extract_zip(source: &Path, destination: &Path) -> Result<()> {
+fn extract_7z(path: &Path, destination: &Path, budget: &mut ExtractionBudget) -> Result<()> {
+    sevenz_rust2::decompress_file_with_extract_fn(path, destination, |entry, reader, _| {
+        let result = (|| -> Result<()> {
+            budget.entry()?;
+            let target = safe_target(destination, Path::new(entry.name()))?;
+            if entry.is_directory() {
+                fs::create_dir_all(target).map_err(archive_error)?;
+            } else {
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent).map_err(archive_error)?;
+                }
+                let mut output = File::options()
+                    .write(true)
+                    .create_new(true)
+                    .open(target)
+                    .map_err(archive_error)?;
+                budget.copy(reader, &mut output)?;
+            }
+            Ok(())
+        })();
+        result
+            .map(|()| true)
+            .map_err(|e| sevenz_rust2::Error::from(std::io::Error::other(e.to_string())))
+    })
+    .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))
+}
+
+fn extract_zip(source: &Path, destination: &Path, budget: &mut ExtractionBudget) -> Result<()> {
     let file =
         File::open(source).map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
     let mut archive = ZipArchive::new(file)
@@ -93,8 +123,8 @@ fn extract_zip(source: &Path, destination: &Path) -> Result<()> {
             "archive contains too many entries".into(),
         ));
     }
-    let mut total = 0_u64;
     for index in 0..archive.len() {
+        budget.entry()?;
         let mut entry = archive
             .by_index(index)
             .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
@@ -109,26 +139,22 @@ fn extract_zip(source: &Path, destination: &Path) -> Result<()> {
         let enclosed = entry.enclosed_name().ok_or_else(|| {
             FontFerryError::ArchiveRejected("archive entry escapes destination".into())
         })?;
-        let target = destination.join(enclosed);
+        let target = safe_target(destination, &enclosed)?;
         if entry.is_dir() {
             fs::create_dir_all(&target)
                 .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
             continue;
         }
-        total = total.saturating_add(entry.size());
-        if total > MAX_EXTRACTED_BYTES {
-            return Err(FontFerryError::ArchiveRejected(
-                "archive exceeds the 4 GiB extraction limit".into(),
-            ));
-        }
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)
                 .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
         }
-        let mut output = File::create(target)
+        let mut output = File::options()
+            .write(true)
+            .create_new(true)
+            .open(target)
             .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
-        std::io::copy(&mut entry, &mut output)
-            .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
+        budget.copy(&mut entry, &mut output)?;
         output
             .flush()
             .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
@@ -136,42 +162,83 @@ fn extract_zip(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn extract_tar_gz(source: &Path, destination: &Path) -> Result<()> {
-    let file =
-        File::open(source).map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
-    let decoder = GzDecoder::new(file);
-    let mut archive = Archive::new(decoder);
-    let mut count = 0_usize;
-    let mut total = 0_u64;
-    for entry in archive
-        .entries()
-        .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?
-    {
-        let mut entry =
-            entry.map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
-        count += 1;
-        if count > MAX_ARCHIVE_ENTRIES {
-            return Err(FontFerryError::ArchiveRejected(
-                "archive contains too many entries".into(),
-            ));
-        }
+fn extract_tar_gz(source: &Path, destination: &Path, budget: &mut ExtractionBudget) -> Result<()> {
+    let file = File::open(source).map_err(archive_error)?;
+    let mut archive = Archive::new(GzDecoder::new(file));
+    for entry in archive.entries().map_err(archive_error)? {
+        budget.entry()?;
+        let mut entry = entry.map_err(archive_error)?;
+        let target = safe_target(destination, &entry.path().map_err(archive_error)?)?;
         let kind = entry.header().entry_type();
-        if kind.is_symlink() || kind.is_hard_link() {
+        if kind.is_dir() {
+            fs::create_dir_all(target).map_err(archive_error)?;
+        } else if kind.is_file() {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(archive_error)?;
+            }
+            let mut output = File::options()
+                .write(true)
+                .create_new(true)
+                .open(target)
+                .map_err(archive_error)?;
+            budget.copy(&mut entry, &mut output)?;
+        } else {
             return Err(FontFerryError::ArchiveRejected(
-                "archive contains a link".into(),
+                "archive contains a link or special file".into(),
             ));
         }
-        total = total.saturating_add(entry.header().size().unwrap_or(0));
-        if total > MAX_EXTRACTED_BYTES {
-            return Err(FontFerryError::ArchiveRejected(
-                "archive exceeds the 4 GiB extraction limit".into(),
-            ));
-        }
-        entry
-            .unpack_in(destination)
-            .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
     }
     Ok(())
+}
+
+fn safe_target(root: &Path, entry: &Path) -> Result<PathBuf> {
+    if entry.as_os_str().is_empty()
+        || entry.components().any(|c| {
+            !matches!(
+                c,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        })
+        || entry.to_string_lossy().contains(['\\', ':'])
+    {
+        return Err(FontFerryError::ArchiveRejected(
+            "archive path escapes destination".into(),
+        ));
+    }
+    Ok(root.join(entry))
+}
+
+fn archive_error(error: std::io::Error) -> FontFerryError {
+    FontFerryError::ArchiveRejected(error.to_string())
+}
+
+struct ExtractionBudget {
+    bytes: u64,
+    entries: usize,
+}
+impl ExtractionBudget {
+    fn new(bytes: u64, entries: usize) -> Self {
+        Self { bytes, entries }
+    }
+    fn entry(&mut self) -> Result<()> {
+        self.entries = self.entries.checked_sub(1).ok_or_else(|| {
+            FontFerryError::ArchiveRejected("operation contains too many archive entries".into())
+        })?;
+        Ok(())
+    }
+    fn copy(&mut self, reader: &mut dyn Read, writer: &mut dyn Write) -> Result<()> {
+        let mut buffer = [0; 64 * 1024];
+        loop {
+            let count = reader.read(&mut buffer).map_err(archive_error)?;
+            if count == 0 {
+                return Ok(());
+            }
+            self.bytes = self.bytes.checked_sub(count as u64).ok_or_else(|| {
+                FontFerryError::ArchiveRejected("operation exceeds extraction byte budget".into())
+            })?;
+            writer.write_all(&buffer[..count]).map_err(archive_error)?;
+        }
+    }
 }
 
 fn validate_extracted_tree(root: &Path) -> Result<()> {
@@ -219,8 +286,11 @@ fn validate_extracted_tree(root: &Path) -> Result<()> {
 pub fn inspect_font_file(path: &Path) -> Result<PreparedFont> {
     let mut bytes = Vec::new();
     File::open(path)
-        .and_then(|mut file| file.read_to_end(&mut bytes))
+        .and_then(|file| file.take(256 * 1024 * 1024 + 1).read_to_end(&mut bytes))
         .map_err(|error| FontFerryError::FontRejected(error.to_string()))?;
+    if bytes.len() > 256 * 1024 * 1024 {
+        return Err(FontFerryError::FontRejected("font exceeds 256 MiB".into()));
+    }
     let face = Face::parse(&bytes, 0)
         .map_err(|_| FontFerryError::FontRejected(format!("invalid font '{}'", path.display())))?;
     let name = |id| {
@@ -280,7 +350,14 @@ mod tests {
         archive.start_file("../escape.ttf", SimpleFileOptions::default())?;
         archive.write_all(b"not-a-font")?;
         archive.finish()?;
-        assert!(extract_zip(&archive_path, &root.join("out")).is_err());
+        assert!(
+            extract_zip(
+                &archive_path,
+                &root.join("out"),
+                &mut ExtractionBudget::new(1024, 10)
+            )
+            .is_err()
+        );
         Ok(())
     }
 
@@ -290,6 +367,75 @@ mod tests {
         let path = temporary.path().join("fake.ttf");
         fs::write(&path, b"not a font")?;
         assert!(inspect_font_file(&path).is_err());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    #[test]
+    fn actual_output_budget_is_shared_and_never_writes_over_limit() -> Result<()> {
+        let mut budget = ExtractionBudget::new(5, 2);
+        let mut first = Vec::new();
+        budget.entry()?;
+        budget.copy(&mut &b"abc"[..], &mut first)?;
+        let mut second = Vec::new();
+        budget.entry()?;
+        assert!(budget.copy(&mut &b"def"[..], &mut second).is_err());
+        assert!(second.is_empty());
+        assert!(budget.entry().is_err());
+        Ok(())
+    }
+    #[test]
+    fn rejects_cross_platform_archive_escape_paths() {
+        for name in [
+            "../outside",
+            "/absolute",
+            "C:\\outside",
+            "dir/../../outside",
+            "dir\\..\\outside",
+        ] {
+            assert!(
+                safe_target(Path::new("out"), Path::new(name)).is_err(),
+                "{name}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod sevenz_tests {
+    use super::*;
+    use sevenz_rust2::{ArchiveEntry, ArchiveWriter};
+
+    #[test]
+    fn sevenz_callback_enforces_paths_output_and_cumulative_entry_budget()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let archive = directory.path().join("payload.7z");
+        let mut writer = ArchiveWriter::create(&archive)?;
+        writer.push_archive_entry(ArchiveEntry::new_file("payload.ttf"), Some(&b"sixsix"[..]))?;
+        writer.finish()?;
+        let out = directory.path().join("out");
+        assert!(extract_7z(&archive, &out, &mut ExtractionBudget::new(5, 10)).is_err());
+        assert!(fs::metadata(out.join("payload.ttf"))?.len() <= 5);
+        let mut budget = ExtractionBudget::new(100, 1);
+        extract_7z(&archive, &directory.path().join("first"), &mut budget)?;
+        assert!(extract_7z(&archive, &directory.path().join("second"), &mut budget).is_err());
+        let traversal = directory.path().join("traversal.7z");
+        let mut writer = ArchiveWriter::create(&traversal)?;
+        writer.push_archive_entry(ArchiveEntry::new_file("../escape.ttf"), Some(&b"bad"[..]))?;
+        writer.finish()?;
+        assert!(
+            extract_7z(
+                &traversal,
+                &directory.path().join("safe"),
+                &mut ExtractionBudget::new(100, 10)
+            )
+            .is_err()
+        );
+        assert!(!directory.path().join("escape.ttf").exists());
         Ok(())
     }
 }

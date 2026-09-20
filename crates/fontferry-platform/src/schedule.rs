@@ -7,7 +7,6 @@ pub enum SchedulerKind {
     WindowsTaskScheduler,
     MacosLaunchAgent,
     SystemdUser,
-    StartupFallback,
 }
 
 #[derive(Clone, Debug)]
@@ -25,19 +24,72 @@ pub fn remove_daily_schedule() -> Result<ScheduleResult> {
     platform::remove()
 }
 
+/// Both GUI and CLI enter here. A persisted intent precedes native mutation;
+/// an interrupted/failed change is unknown until explicitly retried, never a stale success.
+pub fn update_daily_schedule(
+    engine: &fontferry_core::FontEngine,
+    state: &crate::SqliteState,
+    executable: &Path,
+    enabled: bool,
+) -> Result<ScheduleResult> {
+    let _guard = engine.acquire_operation_lock()?;
+    apply_schedule(state, enabled, || {
+        if enabled {
+            platform::install(executable)
+        } else {
+            platform::remove()
+        }
+    })
+}
+
+fn apply_schedule(
+    state: &crate::SqliteState,
+    enabled: bool,
+    apply: impl FnOnce() -> Result<ScheduleResult>,
+) -> Result<ScheduleResult> {
+    state.set_setting("schedule-pending", &Some(enabled))?;
+    let result = apply()?;
+    if result.enabled != enabled {
+        return Err(FontFerryError::State(
+            "scheduler result disagrees with requested state; retry schedule settings".into(),
+        ));
+    }
+    state.set_setting("schedule-enabled", &result.enabled)?;
+    state.set_setting("schedule-pending", &Option::<bool>::None)?;
+    Ok(result)
+}
+
+/// None means a previous operation may have partially changed the native scheduler.
+pub fn saved_schedule_state(state: &crate::SqliteState) -> Result<Option<bool>> {
+    if state
+        .get_setting::<Option<bool>>("schedule-pending")?
+        .flatten()
+        .is_some()
+    {
+        return Ok(None);
+    }
+    Ok(Some(
+        state.get_setting("schedule-enabled")?.unwrap_or(false),
+    ))
+}
+
 fn command_error(error: std::io::Error) -> FontFerryError {
     FontFerryError::Platform(error.to_string())
 }
 
-fn run(command: &mut Command) -> Result<()> {
+fn checked_output(command: &mut Command) -> Result<std::process::Output> {
     let output = command.output().map_err(command_error)?;
     if output.status.success() {
-        Ok(())
+        Ok(output)
     } else {
         Err(FontFerryError::Platform(
             String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         ))
     }
+}
+
+fn run(command: &mut Command) -> Result<()> {
+    checked_output(command).map(|_| ())
 }
 
 #[cfg(windows)]
@@ -63,9 +115,8 @@ mod platform {
     }
 
     pub fn remove() -> Result<ScheduleResult> {
-        let _ignored = Command::new("schtasks")
-            .args(["/Delete", "/F", "/TN", TASK_NAME])
-            .output();
+        // Enumerating all tasks distinguishes absence from a failed task query without localized error parsing.
+        run(Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", r"$ErrorActionPreference = 'Stop'; Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq 'UserDailyUpdate' -and $_.TaskPath -eq '\FontFerry\' } | Unregister-ScheduledTask -Confirm:$false -ErrorAction Stop"]))?;
         Ok(ScheduleResult {
             kind: SchedulerKind::WindowsTaskScheduler,
             enabled: false,
@@ -80,7 +131,7 @@ mod platform {
 
     use fontferry_core::{FontFerryError, Result};
 
-    use super::{ScheduleResult, SchedulerKind, command_error, run};
+    use super::{ScheduleResult, SchedulerKind, checked_output, command_error, run};
 
     const LABEL: &str = "io.github.teckc.fontferry.update";
 
@@ -102,7 +153,6 @@ mod platform {
 </dict></plist>
 "#
         );
-        fs::write(&plist, body).map_err(command_error)?;
         let user_id = Command::new("id")
             .arg("-u")
             .output()
@@ -113,9 +163,12 @@ mod platform {
             ));
         }
         let domain = format!("gui/{}", String::from_utf8_lossy(&user_id.stdout).trim());
-        let _ignored = Command::new("launchctl")
-            .args(["bootout", &domain, &plist.to_string_lossy()])
-            .output();
+        if loaded()? {
+            run(Command::new("launchctl")
+                .arg("bootout")
+                .arg(format!("{domain}/{LABEL}")))?;
+        }
+        fs::write(&plist, body).map_err(command_error)?;
         run(Command::new("launchctl").args(["bootstrap", &domain, &plist.to_string_lossy()]))?;
         Ok(ScheduleResult {
             kind: SchedulerKind::MacosLaunchAgent,
@@ -131,12 +184,28 @@ mod platform {
             .join("Library")
             .join("LaunchAgents")
             .join(format!("{LABEL}.plist"));
-        let _ignored = fs::remove_file(&plist);
+        if loaded()? {
+            let user_id = checked_output(Command::new("id").arg("-u"))?;
+            let domain = format!("gui/{}", String::from_utf8_lossy(&user_id.stdout).trim());
+            run(Command::new("launchctl")
+                .arg("bootout")
+                .arg(format!("{domain}/{LABEL}")))?;
+        }
+        if plist.exists() {
+            fs::remove_file(&plist).map_err(command_error)?;
+        }
         Ok(ScheduleResult {
             kind: SchedulerKind::MacosLaunchAgent,
             enabled: false,
             detail: plist.display().to_string(),
         })
+    }
+
+    fn loaded() -> Result<bool> {
+        let output = checked_output(Command::new("launchctl").arg("list"))?;
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.split_whitespace().last() == Some(LABEL)))
     }
 
     fn xml_escape(value: &str) -> String {
@@ -154,24 +223,13 @@ mod platform {
 
     use fontferry_core::{FontFerryError, Result};
 
-    use super::{ScheduleResult, SchedulerKind, command_error, run};
+    use super::{ScheduleResult, SchedulerKind, checked_output, command_error, run};
 
     const SERVICE: &str = "fontferry-update.service";
     const TIMER: &str = "fontferry-update.timer";
 
     pub fn install(executable: &Path) -> Result<ScheduleResult> {
-        if Command::new("systemctl")
-            .args(["--user", "--version"])
-            .output()
-            .is_err()
-        {
-            return Ok(ScheduleResult {
-                kind: SchedulerKind::StartupFallback,
-                enabled: true,
-                detail: "systemd user session unavailable; application startup fallback enabled"
-                    .into(),
-            });
-        }
+        run(Command::new("systemctl").args(["--user", "show-environment"]))?;
         let home = env::var_os("HOME")
             .ok_or_else(|| FontFerryError::Platform("HOME is not available".into()))?;
         let directory = Path::new(&home)
@@ -202,9 +260,17 @@ mod platform {
     }
 
     pub fn remove() -> Result<ScheduleResult> {
-        let _ignored = Command::new("systemctl")
-            .args(["--user", "disable", "--now", TIMER])
-            .output();
+        run(Command::new("systemctl").args(["--user", "show-environment"]))?;
+        let listed = checked_output(Command::new("systemctl").args([
+            "--user",
+            "list-unit-files",
+            TIMER,
+            "--no-legend",
+            "--no-pager",
+        ]))?;
+        if !String::from_utf8_lossy(&listed.stdout).trim().is_empty() {
+            run(Command::new("systemctl").args(["--user", "disable", "--now", TIMER]))?;
+        }
         Ok(ScheduleResult {
             kind: SchedulerKind::SystemdUser,
             enabled: false,
@@ -213,6 +279,90 @@ mod platform {
     }
 
     fn systemd_escape(value: &str) -> String {
-        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+        format!(
+            "\"{}\"",
+            value
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('%', "%%")
+                .replace('$', "$$")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+    fn success(enabled: bool) -> ScheduleResult {
+        ScheduleResult {
+            kind: SchedulerKind::SystemdUser,
+            enabled,
+            detail: "test".into(),
+        }
+    }
+
+    #[test]
+    fn partial_native_failure_survives_restart_as_unknown_and_can_retry() -> TestResult {
+        let root = tempfile::tempdir()?;
+        let database = root.path().join("state.sqlite");
+        let state = crate::SqliteState::open(&database)?;
+        apply_schedule(&state, true, || Ok(success(true)))?;
+        assert!(
+            apply_schedule(&state, false, || Err(FontFerryError::Platform(
+                "injected failure after unload".into()
+            )))
+            .is_err()
+        );
+        drop(state);
+        let state = crate::SqliteState::open(&database)?;
+        assert_eq!(saved_schedule_state(&state)?, None);
+        apply_schedule(&state, false, || Ok(success(false)))?;
+        assert_eq!(saved_schedule_state(&state)?, Some(false));
+        Ok(())
+    }
+
+    #[test]
+    fn persistence_failure_after_native_change_never_reports_saved_success() -> TestResult {
+        let root = tempfile::tempdir()?;
+        let database = root.path().join("state.sqlite");
+        let state = crate::SqliteState::open(&database)?;
+        let sql = rusqlite::Connection::open(&database)?;
+        sql.execute_batch("CREATE TRIGGER fail_schedule BEFORE INSERT ON settings WHEN NEW.key = 'schedule-enabled' BEGIN SELECT RAISE(FAIL, 'injected commit failure'); END;")?;
+        let called = std::cell::Cell::new(false);
+        assert!(
+            apply_schedule(&state, true, || {
+                called.set(true);
+                Ok(success(true))
+            })
+            .is_err()
+        );
+        assert!(called.get());
+        assert_eq!(saved_schedule_state(&state)?, None);
+        sql.execute_batch("DROP TRIGGER fail_schedule;")?;
+        apply_schedule(&state, true, || Ok(success(true)))?;
+        assert_eq!(saved_schedule_state(&state)?, Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn intent_failure_prevents_native_mutation() -> TestResult {
+        let root = tempfile::tempdir()?;
+        let database = root.path().join("state.sqlite");
+        let state = crate::SqliteState::open(&database)?;
+        let sql = rusqlite::Connection::open(&database)?;
+        sql.execute_batch("CREATE TRIGGER fail_intent BEFORE INSERT ON settings BEGIN SELECT RAISE(FAIL, 'injected intent failure'); END;")?;
+        let called = std::cell::Cell::new(false);
+        assert!(
+            apply_schedule(&state, true, || {
+                called.set(true);
+                Ok(success(true))
+            })
+            .is_err()
+        );
+        assert!(!called.get());
+        Ok(())
     }
 }

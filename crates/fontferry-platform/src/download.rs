@@ -52,12 +52,12 @@ impl ArtifactSource for HttpClient {
         };
 
         let mut paths = Vec::with_capacity(assets.len());
-        for (url, name, digest) in assets {
+        for (index, (url, name, digest)) in assets.into_iter().enumerate() {
             paths.push(
                 download_one(
                     self,
                     &url,
-                    &safe_filename(&name),
+                    &format!("{index}-{}", safe_filename(&name)),
                     digest.as_deref(),
                     staging_directory,
                 )
@@ -74,17 +74,19 @@ fn select_assets<'a>(
     requested_variants: &[String],
 ) -> Result<Vec<&'a ReleaseAsset>> {
     let requested: BTreeSet<_> = requested_variants.iter().map(String::as_str).collect();
-    let variants: Vec<_> = if requested.is_empty() {
-        font.variants
-            .iter()
-            .filter(|variant| variant.default)
-            .collect()
-    } else {
-        font.variants
-            .iter()
-            .filter(|variant| requested.contains(variant.id.as_str()))
-            .collect()
-    };
+    if requested
+        .iter()
+        .any(|id| !font.variants.iter().any(|v| v.id == *id))
+    {
+        return Err(FontFerryError::DownloadRejected(
+            "unknown variant ID".into(),
+        ));
+    }
+    let variants: Vec<_> = font
+        .variants
+        .iter()
+        .filter(|v| requested.contains(v.id.as_str()))
+        .collect();
     if variants.is_empty() {
         return Err(FontFerryError::DownloadRejected(
             "no font variants were selected".into(),
@@ -149,7 +151,7 @@ async fn download_with_retries(
                     attempt,
                     max_attempts = MAX_DOWNLOAD_ATTEMPTS,
                     retry,
-                    error = ?error,
+                    status = ?error.status(),
                     "font download failed"
                 );
                 let _ = tokio::fs::remove_file(&partial).await;
