@@ -7,7 +7,6 @@ pub enum SchedulerKind {
     WindowsTaskScheduler,
     MacosLaunchAgent,
     SystemdUser,
-    StartupFallback,
 }
 
 #[derive(Clone, Debug)]
@@ -29,15 +28,19 @@ fn command_error(error: std::io::Error) -> FontFerryError {
     FontFerryError::Platform(error.to_string())
 }
 
-fn run(command: &mut Command) -> Result<()> {
+fn checked_output(command: &mut Command) -> Result<std::process::Output> {
     let output = command.output().map_err(command_error)?;
     if output.status.success() {
-        Ok(())
+        Ok(output)
     } else {
         Err(FontFerryError::Platform(
             String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         ))
     }
+}
+
+fn run(command: &mut Command) -> Result<()> {
+    checked_output(command).map(|_| ())
 }
 
 #[cfg(windows)]
@@ -63,9 +66,8 @@ mod platform {
     }
 
     pub fn remove() -> Result<ScheduleResult> {
-        let _ignored = Command::new("schtasks")
-            .args(["/Delete", "/F", "/TN", TASK_NAME])
-            .output();
+        // Enumerating all tasks distinguishes absence from a failed task query without localized error parsing.
+        run(Command::new("powershell.exe").args(["-NoProfile", "-NonInteractive", "-Command", r"$ErrorActionPreference = 'Stop'; Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq 'UserDailyUpdate' -and $_.TaskPath -eq '\FontFerry\' } | Unregister-ScheduledTask -Confirm:$false -ErrorAction Stop"]))?;
         Ok(ScheduleResult {
             kind: SchedulerKind::WindowsTaskScheduler,
             enabled: false,
@@ -80,7 +82,7 @@ mod platform {
 
     use fontferry_core::{FontFerryError, Result};
 
-    use super::{ScheduleResult, SchedulerKind, command_error, run};
+    use super::{ScheduleResult, SchedulerKind, checked_output, command_error, run};
 
     const LABEL: &str = "io.github.teckc.fontferry.update";
 
@@ -102,7 +104,6 @@ mod platform {
 </dict></plist>
 "#
         );
-        fs::write(&plist, body).map_err(command_error)?;
         let user_id = Command::new("id")
             .arg("-u")
             .output()
@@ -113,9 +114,12 @@ mod platform {
             ));
         }
         let domain = format!("gui/{}", String::from_utf8_lossy(&user_id.stdout).trim());
-        let _ignored = Command::new("launchctl")
-            .args(["bootout", &domain, &plist.to_string_lossy()])
-            .output();
+        if loaded()? {
+            run(Command::new("launchctl")
+                .arg("bootout")
+                .arg(format!("{domain}/{LABEL}")))?;
+        }
+        fs::write(&plist, body).map_err(command_error)?;
         run(Command::new("launchctl").args(["bootstrap", &domain, &plist.to_string_lossy()]))?;
         Ok(ScheduleResult {
             kind: SchedulerKind::MacosLaunchAgent,
@@ -131,12 +135,28 @@ mod platform {
             .join("Library")
             .join("LaunchAgents")
             .join(format!("{LABEL}.plist"));
-        let _ignored = fs::remove_file(&plist);
+        if loaded()? {
+            let user_id = checked_output(Command::new("id").arg("-u"))?;
+            let domain = format!("gui/{}", String::from_utf8_lossy(&user_id.stdout).trim());
+            run(Command::new("launchctl")
+                .arg("bootout")
+                .arg(format!("{domain}/{LABEL}")))?;
+        }
+        if plist.exists() {
+            fs::remove_file(&plist).map_err(command_error)?;
+        }
         Ok(ScheduleResult {
             kind: SchedulerKind::MacosLaunchAgent,
             enabled: false,
             detail: plist.display().to_string(),
         })
+    }
+
+    fn loaded() -> Result<bool> {
+        let output = checked_output(Command::new("launchctl").arg("list"))?;
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.split_whitespace().last() == Some(LABEL)))
     }
 
     fn xml_escape(value: &str) -> String {
@@ -154,24 +174,13 @@ mod platform {
 
     use fontferry_core::{FontFerryError, Result};
 
-    use super::{ScheduleResult, SchedulerKind, command_error, run};
+    use super::{ScheduleResult, SchedulerKind, checked_output, command_error, run};
 
     const SERVICE: &str = "fontferry-update.service";
     const TIMER: &str = "fontferry-update.timer";
 
     pub fn install(executable: &Path) -> Result<ScheduleResult> {
-        if Command::new("systemctl")
-            .args(["--user", "--version"])
-            .output()
-            .is_err()
-        {
-            return Ok(ScheduleResult {
-                kind: SchedulerKind::StartupFallback,
-                enabled: true,
-                detail: "systemd user session unavailable; application startup fallback enabled"
-                    .into(),
-            });
-        }
+        run(Command::new("systemctl").args(["--user", "show-environment"]))?;
         let home = env::var_os("HOME")
             .ok_or_else(|| FontFerryError::Platform("HOME is not available".into()))?;
         let directory = Path::new(&home)
@@ -202,9 +211,17 @@ mod platform {
     }
 
     pub fn remove() -> Result<ScheduleResult> {
-        let _ignored = Command::new("systemctl")
-            .args(["--user", "disable", "--now", TIMER])
-            .output();
+        run(Command::new("systemctl").args(["--user", "show-environment"]))?;
+        let listed = checked_output(Command::new("systemctl").args([
+            "--user",
+            "list-unit-files",
+            TIMER,
+            "--no-legend",
+            "--no-pager",
+        ]))?;
+        if !String::from_utf8_lossy(&listed.stdout).trim().is_empty() {
+            run(Command::new("systemctl").args(["--user", "disable", "--now", TIMER]))?;
+        }
         Ok(ScheduleResult {
             kind: SchedulerKind::SystemdUser,
             enabled: false,
@@ -213,6 +230,15 @@ mod platform {
     }
 
     fn systemd_escape(value: &str) -> String {
-        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+        format!(
+            "\"{}\"",
+            value
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('%', "%%")
+                .replace('$', "$$")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+        )
     }
 }

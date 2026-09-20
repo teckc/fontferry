@@ -1,4 +1,4 @@
-use std::{net::IpAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use fontferry_core::{
@@ -72,7 +72,10 @@ impl ReleaseSource for CachedReleaseSource {
                         checked_at = %cached.checked_at,
                         "network check failed; using cached release metadata"
                     );
-                    Ok(cached.releases)
+                    Err(FontFerryError::Network(format!(
+                        "在线检查失败；缓存日期 {}，无法确认是否最新",
+                        cached.checked_at
+                    )))
                 } else {
                     Err(network_error)
                 }
@@ -85,16 +88,18 @@ impl HttpClient {
     pub fn new() -> Result<Self> {
         let inner = Client::builder()
             .redirect(redirect_policy())
+            .dns_resolver(Arc::new(PublicResolver))
             .connect_timeout(Duration::from_secs(20))
             .timeout(Duration::from_secs(120))
             .build()
-            .map_err(|error| FontFerryError::Network(error.to_string()))?;
+            .map_err(network_error)?;
         let downloads = Client::builder()
             .redirect(redirect_policy())
+            .dns_resolver(Arc::new(PublicResolver))
             .connect_timeout(Duration::from_secs(20))
             .read_timeout(Duration::from_secs(90))
             .build()
-            .map_err(|error| FontFerryError::Network(error.to_string()))?;
+            .map_err(network_error)?;
         Ok(Self { inner, downloads })
     }
 
@@ -150,24 +155,29 @@ impl ReleaseSource for HttpClient {
 impl HttpClient {
     async fn github_releases(&self, repository: &str) -> Result<Vec<Release>> {
         validate_repository(repository)?;
-        let url = Url::parse(&format!(
-            "{GITHUB_API}/repos/{repository}/releases?per_page=20"
-        ))
-        .map_err(|error| FontFerryError::Network(error.to_string()))?;
-        let response = self
-            .inner
-            .get(url)
-            .header(USER_AGENT, "FontFerry/0.2")
-            .header(ACCEPT, "application/vnd.github+json")
-            .send()
-            .await
-            .map_err(|error| FontFerryError::Network(error.to_string()))?
-            .error_for_status()
-            .map_err(|error| FontFerryError::Network(error.to_string()))?;
-        let releases: Vec<GitHubRelease> = response
-            .json()
-            .await
-            .map_err(|error| FontFerryError::Network(error.to_string()))?;
+        let mut releases = Vec::new();
+        for page in 1..=100 {
+            let url = format!("{GITHUB_API}/repos/{repository}/releases?per_page=100&page={page}");
+            let response = self
+                .inner
+                .get(url)
+                .header(USER_AGENT, "FontFerry/0.2")
+                .header(ACCEPT, "application/vnd.github+json")
+                .send()
+                .await
+                .map_err(network_error)?
+                .error_for_status()
+                .map_err(network_error)?;
+            let batch: Vec<GitHubRelease> = read_json(response).await?;
+            let done = batch.len() < 100;
+            releases.extend(batch);
+            if done {
+                break;
+            }
+            if page == 100 {
+                return Err(FontFerryError::Network("release pagination exceeds safety limit; refusing incomplete version selection".into()));
+            }
+        }
         Ok(releases
             .into_iter()
             .filter(|release| !release.draft)
@@ -196,13 +206,10 @@ impl HttpClient {
             .header(USER_AGENT, "FontFerry/0.2")
             .send()
             .await
-            .map_err(|error| FontFerryError::Network(error.to_string()))?
+            .map_err(network_error)?
             .error_for_status()
-            .map_err(|error| FontFerryError::Network(error.to_string()))?;
-        let body: FontAwesomeResponse = response
-            .json()
-            .await
-            .map_err(|error| FontFerryError::Network(error.to_string()))?;
+            .map_err(network_error)?;
+        let body: FontAwesomeResponse = read_json(response).await?;
         Ok(body
             .releases
             .into_iter()
@@ -241,13 +248,10 @@ impl HttpClient {
             .header(USER_AGENT, "FontFerry/0.2")
             .send()
             .await
-            .map_err(|error| FontFerryError::Network(error.to_string()))?
+            .map_err(network_error)?
             .error_for_status()
-            .map_err(|error| FontFerryError::Network(error.to_string()))?;
-        let value: Value = response
-            .json()
-            .await
-            .map_err(|error| FontFerryError::Network(error.to_string()))?;
+            .map_err(network_error)?;
+        let value: Value = read_json(response).await?;
         let version = value
             .pointer(version_pointer)
             .and_then(Value::as_str)
@@ -275,9 +279,9 @@ impl HttpClient {
             .header(USER_AGENT, "FontFerry/0.2")
             .send()
             .await
-            .map_err(|error| FontFerryError::Network(error.to_string()))?
+            .map_err(network_error)?
             .error_for_status()
-            .map_err(|error| FontFerryError::Network(error.to_string()))?;
+            .map_err(network_error)?;
         let fingerprint = response
             .headers()
             .get(ETAG)
@@ -301,29 +305,106 @@ pub fn validate_public_https(url: &Url) -> Result<()> {
             "only HTTPS URLs are allowed".into(),
         ));
     }
-    let host = url
-        .host_str()
-        .ok_or_else(|| FontFerryError::DownloadRejected("URL has no host".into()))?;
-    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".local") {
+    if !url.username().is_empty() || url.password().is_some() {
         return Err(FontFerryError::DownloadRejected(
-            "local network hosts are not allowed".into(),
+            "URL credentials are not allowed".into(),
         ));
     }
-    if let Ok(address) = IpAddr::from_str(host)
-        && (address.is_loopback() || address.is_unspecified() || is_private_or_link_local(address))
-    {
-        return Err(FontFerryError::DownloadRejected(
-            "private network addresses are not allowed".into(),
-        ));
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) if !public_address(IpAddr::V4(ip)) => {
+            return Err(FontFerryError::DownloadRejected(
+                "non-public address".into(),
+            ));
+        }
+        Some(url::Host::Ipv6(ip)) if !public_address(IpAddr::V6(ip)) => {
+            return Err(FontFerryError::DownloadRejected(
+                "non-public address".into(),
+            ));
+        }
+        Some(url::Host::Domain(host))
+            if host.trim_end_matches('.').eq_ignore_ascii_case("localhost")
+                || host.trim_end_matches('.').ends_with(".local") =>
+        {
+            return Err(FontFerryError::DownloadRejected("local hostname".into()));
+        }
+        None => return Err(FontFerryError::DownloadRejected("URL has no host".into())),
+        _ => {}
     }
     Ok(())
 }
 
-fn is_private_or_link_local(address: IpAddr) -> bool {
+fn public_address(address: IpAddr) -> bool {
     match address {
-        IpAddr::V4(address) => address.is_private() || address.is_link_local(),
-        IpAddr::V6(address) => address.is_unique_local() || address.is_unicast_link_local(),
+        IpAddr::V4(ip) => {
+            !(ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.octets()[0] == 0
+                || ip.octets()[0] >= 240
+                || (ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]))
+                || (ip.octets()[0] == 198 && (18..=19).contains(&ip.octets()[1])))
+        }
+        IpAddr::V6(ip) => ip.to_ipv4_mapped().map_or_else(
+            || {
+                !(ip.is_loopback()
+                    || ip.is_unspecified()
+                    || ip.is_unique_local()
+                    || ip.is_unicast_link_local()
+                    || ip.is_multicast()
+                    || ip.segments()[0] & 0xe000 != 0x2000
+                    || (ip.segments()[0] == 0x2001 && ip.segments()[1] == 0x0db8))
+            },
+            |ip| public_address(IpAddr::V4(ip)),
+        ),
     }
+}
+
+#[derive(Debug)]
+struct PublicResolver;
+impl reqwest::dns::Resolve for PublicResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let addresses: Vec<_> = tokio::net::lookup_host((name.as_str(), 0)).await?.collect();
+            if addresses.is_empty() || addresses.iter().any(|a| !public_address(a.ip())) {
+                return Err(std::io::Error::other("DNS returned a non-public address").into());
+            }
+            Ok(Box::new(addresses.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+fn network_error(error: reqwest::Error) -> FontFerryError {
+    FontFerryError::Network(error.without_url().to_string())
+}
+
+pub(crate) async fn bounded_body(response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
+    use futures_util::StreamExt;
+    if response.content_length().is_some_and(|n| n > limit as u64) {
+        return Err(FontFerryError::DownloadRejected(
+            "metadata exceeds size limit".into(),
+        ));
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(network_error)?;
+        if chunk.len() > limit.saturating_sub(body.len()) {
+            return Err(FontFerryError::DownloadRejected(
+                "metadata exceeds size limit".into(),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+async fn read_json<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> Result<T> {
+    serde_json::from_slice(&bounded_body(response, 5 * 1024 * 1024).await?)
+        .map_err(|_| FontFerryError::Network("invalid remote JSON".into()))
 }
 
 fn validate_repository(repository: &str) -> Result<()> {
@@ -365,4 +446,29 @@ struct FontAwesomeResponse {
 struct FontAwesomeRelease {
     version: String,
     date: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn rejects_local_ipv4_ipv6_mapped_addresses_and_credentials()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        for url in [
+            "http://example.com",
+            "https://127.0.0.1",
+            "https://10.0.0.1",
+            "https://169.254.0.1",
+            "https://[::1]",
+            "https://[::ffff:127.0.0.1]",
+            "https://[fc00::1]",
+            "https://[fe80::1]",
+            "https://localhost.",
+            "https://user:secret@example.com",
+        ] {
+            assert!(validate_public_https(&Url::parse(url)?).is_err(), "{url}");
+        }
+        assert!(validate_public_https(&Url::parse("https://github.com")?).is_ok());
+        Ok(())
+    }
 }
