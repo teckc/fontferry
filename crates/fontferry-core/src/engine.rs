@@ -20,6 +20,28 @@ pub struct UpdateStatus {
     pub available_version: Option<String>,
     pub update_available: bool,
     pub delivery_policy: DeliveryPolicy,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub checked_at: Option<OffsetDateTime>,
+    #[serde(default)]
+    pub from_cache: bool,
+}
+
+impl UpdateStatus {
+    pub fn refresh_local(&mut self, current: Option<String>, fingerprint: bool) {
+        self.current_version = current;
+        self.from_cache = true;
+        self.update_available = match (&self.current_version, &self.available_version) {
+            (Some(current), Some(available)) => {
+                if fingerprint {
+                    current != available
+                } else {
+                    is_update_available(current, available)
+                }
+            }
+            (None, Some(_)) => true,
+            _ => false,
+        };
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -39,6 +61,7 @@ pub struct FontEngine {
     state: Arc<dyn StateRepository>,
     operation_lock: Mutex<()>,
     staging_root: PathBuf,
+    operation_lock_path: PathBuf,
 }
 
 impl std::fmt::Debug for FontEngine {
@@ -73,8 +96,15 @@ impl FontEngine {
             installer,
             state,
             operation_lock: Mutex::new(()),
+            operation_lock_path: staging_root.join("operations.lock"),
             staging_root,
         }
+    }
+
+    #[must_use]
+    pub fn with_operation_lock(mut self, path: PathBuf) -> Self {
+        self.operation_lock_path = path;
+        self
     }
 
     pub fn fonts(&self) -> Vec<FontDefinition> {
@@ -109,17 +139,62 @@ impl FontEngine {
             current_version: current.cloned(),
             available_version: available.map(str::to_owned),
             update_available: match (current, available) {
-                (Some(current), Some(available)) => is_update_available(current, available),
+                (Some(current), Some(available)) => match font.version_provider {
+                    crate::VersionProvider::HttpFingerprint { .. } => current != available,
+                    _ => is_update_available(current, available),
+                },
                 (None, Some(_)) => true,
                 _ => false,
             },
             delivery_policy: font.delivery_policy,
+            checked_at: Some(OffsetDateTime::now_utc()),
+            from_cache: false,
         })
     }
 
     pub async fn install(&self, request: InstallRequest) -> Result<InstalledFont> {
         let _guard = self.operation_lock.lock().await;
+        let _process_guard = self.acquire_operation_lock()?;
+        self.installer.recover(self.state.as_ref()).await?;
+        let font_id = request.font_id.clone();
+        let result = self.install_inner(request).await;
+        match result {
+            Ok(value) => {
+                self.activity(
+                    Some(font_id),
+                    ActivityLevel::Info,
+                    "install completed".into(),
+                )
+                .await?;
+                Ok(value)
+            }
+            Err(error) => {
+                let message = match self.installer.recover(self.state.as_ref()).await {
+                    Ok(()) => error.to_string(),
+                    Err(recovery) => format!(
+                        "{error}; recovery incomplete: {recovery}; retain journal and backups, then restart"
+                    ),
+                };
+                self.record_failure(&font_id, &message).await?;
+                Err(FontFerryError::State(message))
+            }
+        }
+    }
+
+    async fn install_inner(&self, mut request: InstallRequest) -> Result<InstalledFont> {
+        request.variant_ids.sort();
+        request.variant_ids.dedup();
         let font = self.font(&request.font_id)?.clone();
+        if (!font.variants.is_empty() && request.variant_ids.is_empty())
+            || request
+                .variant_ids
+                .iter()
+                .any(|id| !font.variants.iter().any(|v| v.id == *id))
+        {
+            return Err(FontFerryError::DownloadRejected(
+                "请选择有效的字体包；空选择不会安装默认项".into(),
+            ));
+        }
         if font.delivery_policy == DeliveryPolicy::NotifyOnly {
             return Err(FontFerryError::ReminderOnly);
         }
@@ -169,6 +244,22 @@ impl FontEngine {
             .installer
             .install(&font, &release.version, &prepared, previous.as_ref())
             .await?;
+        for warning in &outcome.warnings {
+            self.activity(
+                Some(font.id.clone()),
+                ActivityLevel::Warning,
+                warning.clone(),
+            )
+            .await?;
+        }
+        if outcome.restart_recommended {
+            self.activity(
+                Some(font.id.clone()),
+                ActivityLevel::Warning,
+                "请重新启动使用字体的应用，使新字体生效".into(),
+            )
+            .await?;
+        }
         let installed = InstalledFont {
             font_id: font.id.clone(),
             version: release.version.clone(),
@@ -178,24 +269,8 @@ impl FontEngine {
             previous: outcome.previous_snapshot,
             manual_version: None,
         };
-        if let Err(state_error) = self.state.save_installed(&installed).await {
-            let cleanup_result = if let (Some(_previous), Some(snapshot)) =
-                (previous.as_ref(), installed.previous.as_ref())
-            {
-                self.installer
-                    .restore(&font, snapshot, &installed)
-                    .await
-                    .map(|_| ())
-            } else {
-                self.installer.uninstall(&installed).await
-            };
-            return match cleanup_result {
-                Ok(_) => Err(state_error),
-                Err(cleanup_error) => Err(FontFerryError::State(format!(
-                    "{state_error}; compensation also failed: {cleanup_error}"
-                ))),
-            };
-        }
+        self.state.save_installed(&installed).await?;
+        self.installer.finish(self.state.as_ref()).await?;
         let _activity_result = self
             .activity(
                 Some(font.id),
@@ -206,20 +281,118 @@ impl FontEngine {
         Ok(installed)
     }
 
+    /// Scheduled updates read the current variant selection and version under the operation lock.
+    pub async fn update_installed(&self, font_id: &str) -> Result<Option<InstalledFont>> {
+        let _guard = self.operation_lock.lock().await;
+        let _process_guard = self.acquire_operation_lock()?;
+        self.installer.recover(self.state.as_ref()).await?;
+        let Some(current) = self.state.get_installed(font_id).await? else {
+            return Ok(None);
+        };
+        let status = self.check_font(font_id).await?;
+        if !status.update_available {
+            return Ok(None);
+        }
+        let variants = if current.variant_ids.is_empty() {
+            self.font(font_id)?
+                .variants
+                .iter()
+                .filter(|v| v.default)
+                .map(|v| v.id.clone())
+                .collect()
+        } else {
+            current.variant_ids
+        };
+        match self
+            .install_inner(InstallRequest {
+                font_id: font_id.into(),
+                version: status.available_version,
+                variant_ids: variants,
+                accept_license: false,
+            })
+            .await
+        {
+            Ok(value) => Ok(Some(value)),
+            Err(error) => {
+                let recovery = self.installer.recover(self.state.as_ref()).await;
+                let message = match recovery {
+                    Ok(()) => error.to_string(),
+                    Err(recovery) => format!("{error}; recovery incomplete: {recovery}"),
+                };
+                self.record_failure(font_id, &message).await?;
+                Err(FontFerryError::State(message))
+            }
+        }
+    }
+
     pub async fn uninstall(&self, font_id: &str) -> Result<()> {
         let _guard = self.operation_lock.lock().await;
-        if let Some(installed) = self.state.get_installed(font_id).await? {
-            self.state.remove_installed(font_id).await?;
-            if let Err(platform_error) = self.installer.uninstall(&installed).await {
-                self.state.save_installed(&installed).await?;
-                return Err(platform_error);
+        let _process_guard = self.acquire_operation_lock()?;
+        self.installer.recover(self.state.as_ref()).await?;
+        let operation_font_id = font_id.to_owned();
+        let result = self.uninstall_inner(font_id).await;
+        match result {
+            Ok(value) => {
+                self.activity(
+                    Some(operation_font_id),
+                    ActivityLevel::Info,
+                    "uninstall completed".into(),
+                )
+                .await?;
+                Ok(value)
             }
+            Err(error) => {
+                let message = match self.installer.recover(self.state.as_ref()).await {
+                    Ok(()) => error.to_string(),
+                    Err(recovery) => format!(
+                        "{error}; recovery incomplete: {recovery}; retain journal and backups, then restart"
+                    ),
+                };
+                self.record_failure(&operation_font_id, &message).await?;
+                Err(FontFerryError::State(message))
+            }
+        }
+    }
+
+    async fn uninstall_inner(&self, font_id: &str) -> Result<()> {
+        if let Some(installed) = self.state.get_installed(font_id).await? {
+            self.installer.uninstall(&installed).await?;
+            self.state.remove_installed(font_id).await?;
+            self.installer.finish(self.state.as_ref()).await?;
         }
         Ok(())
     }
 
     pub async fn rollback(&self, font_id: &str) -> Result<InstalledFont> {
         let _guard = self.operation_lock.lock().await;
+        let _process_guard = self.acquire_operation_lock()?;
+        self.installer.recover(self.state.as_ref()).await?;
+        let operation_font_id = font_id.to_owned();
+        let result = self.rollback_inner(font_id).await;
+        match result {
+            Ok(value) => {
+                self.activity(
+                    Some(operation_font_id),
+                    ActivityLevel::Info,
+                    "rollback completed".into(),
+                )
+                .await?;
+                Ok(value)
+            }
+            Err(error) => {
+                let message = match self.installer.recover(self.state.as_ref()).await {
+                    Ok(()) => error.to_string(),
+                    Err(recovery) => format!(
+                        "{error}; recovery incomplete: {recovery}; retain journal and backups, then restart"
+                    ),
+                };
+                self.record_failure(&operation_font_id, &message).await?;
+                Err(FontFerryError::State(message))
+            }
+        }
+    }
+
+    async fn rollback_inner(&self, font_id: &str) -> Result<InstalledFont> {
         let font = self.font(font_id)?.clone();
         let current = self
             .state
@@ -237,17 +410,38 @@ impl FontEngine {
             variant_ids: snapshot.variant_ids.clone(),
             installed_at: OffsetDateTime::now_utc(),
             owned_files: outcome.owned_files,
-            previous: None,
+            previous: outcome.previous_snapshot,
             manual_version: None,
         };
         self.state.save_installed(&restored).await?;
+        self.installer.finish(self.state.as_ref()).await?;
         Ok(restored)
+    }
+
+    /// Nonblocking OS lock, shared by GUI, CLI and recovery. Never delete the lock file.
+    pub fn acquire_operation_lock(&self) -> Result<std::fs::File> {
+        crate::operation::acquire(&self.operation_lock_path)
+    }
+
+    pub async fn recover(&self) -> Result<()> {
+        let _guard = self.operation_lock.lock().await;
+        let _process_guard = self.acquire_operation_lock()?;
+        self.installer.recover(self.state.as_ref()).await
     }
 
     fn font(&self, font_id: &str) -> Result<&FontDefinition> {
         self.catalog
             .get(font_id)
             .ok_or_else(|| FontFerryError::UnknownFont(font_id.to_owned()))
+    }
+
+    pub async fn record_failure(&self, font_id: &str, message: &str) -> Result<()> {
+        self.activity(
+            Some(font_id.to_owned()),
+            ActivityLevel::Error,
+            message.to_owned(),
+        )
+        .await
     }
 
     async fn activity(
@@ -284,7 +478,9 @@ fn requested_release<'a>(
     if let Some(version) = version {
         releases
             .iter()
-            .find(|release| release.version == version)
+            .find(|release| {
+                release.version == version && crate::release_eligible(release, channel, policy)
+            })
             .ok_or(FontFerryError::NoEligibleVersion)
     } else {
         select_latest(releases, channel, policy).ok_or(FontFerryError::NoEligibleVersion)
@@ -378,6 +574,11 @@ mod tests {
 
     #[async_trait]
     impl FontInstaller for TrackingInstaller {
+        async fn recover(&self, _state: &dyn StateRepository) -> Result<()> {
+            self.uninstall_count.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
         async fn install(
             &self,
             _font: &FontDefinition,
@@ -504,7 +705,7 @@ mod tests {
             })
             .await;
         assert!(matches!(result, Err(FontFerryError::State(_))));
-        assert_eq!(uninstall_count.load(Ordering::SeqCst), 1);
+        assert_eq!(uninstall_count.load(Ordering::SeqCst), 2);
         Ok(())
     }
 
@@ -537,5 +738,105 @@ mod tests {
         assert!(status.update_available);
         assert_eq!(status.delivery_policy, DeliveryPolicy::NotifyOnly);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+    use time::macros::{date, datetime};
+    #[test]
+    fn explicit_versions_cannot_bypass_channel_or_entitlements() {
+        let release = Release {
+            version: "2.0.0".into(),
+            published_at: datetime!(2026-06-01 0:00 UTC),
+            prerelease: false,
+            assets: Vec::new(),
+        };
+        for policy in [
+            crate::VersionPolicy {
+                major: Some(1),
+                ..Default::default()
+            },
+            crate::VersionPolicy {
+                maximum_version: Some("1.9".into()),
+                ..Default::default()
+            },
+            crate::VersionPolicy {
+                updates_through: Some(date!(2026 - 01 - 01)),
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                requested_release(
+                    std::slice::from_ref(&release),
+                    Some("2.0.0"),
+                    ReleaseChannel::Stable,
+                    &policy
+                )
+                .is_err()
+            );
+        }
+        let mut preview = release.clone();
+        preview.prerelease = true;
+        assert!(
+            requested_release(
+                &[preview],
+                Some("2.0.0"),
+                ReleaseChannel::Stable,
+                &Default::default()
+            )
+            .is_err()
+        );
+        assert!(
+            requested_release(
+                &[release],
+                Some("2.0.0"),
+                ReleaseChannel::Stable,
+                &Default::default()
+            )
+            .is_ok()
+        );
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+    #[test]
+    fn local_mutations_rederive_cached_dashboard_without_network() {
+        let mut status = UpdateStatus {
+            font_id: "font".into(),
+            current_version: Some("1.9".into()),
+            available_version: Some("1.10".into()),
+            update_available: true,
+            delivery_policy: DeliveryPolicy::AutoInstall,
+            checked_at: Some(OffsetDateTime::UNIX_EPOCH),
+            from_cache: false,
+        };
+        status.refresh_local(Some("1.10".into()), false);
+        assert!(!status.update_available);
+        status.refresh_local(Some("1.9".into()), false);
+        assert!(status.update_available);
+        status.refresh_local(None, false);
+        assert!(status.current_version.is_none());
+        assert_eq!(status.checked_at, Some(OffsetDateTime::UNIX_EPOCH));
+        assert!(status.from_cache);
+    }
+    #[test]
+    fn fingerprints_detect_change_in_either_lexical_direction() {
+        let mut status = UpdateStatus {
+            font_id: "font".into(),
+            current_version: Some("z".into()),
+            available_version: Some("a".into()),
+            update_available: false,
+            delivery_policy: DeliveryPolicy::NotifyOnly,
+            checked_at: None,
+            from_cache: false,
+        };
+        status.refresh_local(Some("z".into()), true);
+        assert!(status.update_available);
+        status.refresh_local(Some("a".into()), true);
+        assert!(!status.update_available);
     }
 }

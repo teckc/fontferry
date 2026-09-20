@@ -91,6 +91,16 @@ pub trait FontPreparer: Send + Sync {
 
 #[async_trait]
 pub trait FontInstaller: Send + Sync {
+    /// Resolve a durable operation using the database as the commit authority.
+    async fn recover(&self, _state: &dyn StateRepository) -> Result<()> {
+        Ok(())
+    }
+
+    /// Complete cleanup only after the database has committed.
+    async fn finish(&self, state: &dyn StateRepository) -> Result<()> {
+        self.recover(state).await
+    }
+
     async fn install(
         &self,
         font: &FontDefinition,
