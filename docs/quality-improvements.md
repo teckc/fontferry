@@ -43,6 +43,8 @@ The journal covers process interruption. This implementation does **not** claim 
 
 ## Validation evidence
 
+All executable changes at commit `44cf1effca05e2b505bb607d20fa4048f58df013` passed all five remote jobs: Rust on Windows 2025, macOS 15 and Ubuntu 24.04, Frontend (including three Playwright tests), and Dependency policy in [CI run 35516799357](https://github.com/teckc/fontferry/actions/runs/35516799357). The final record-only follow-up also removes one trailing blank line from a TypeScript type file; it makes no executable change. Native OS behavior still requires the acceptance steps below.
+
 Local Linux checks:
 
 - `cargo fmt --all -- --check`: passed after formatting.

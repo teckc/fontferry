@@ -9,4 +9,3 @@ export type Operation = {
     title: string;
     detail: string;
   };
-
