@@ -542,18 +542,12 @@ mod platform {
             .0;
         for path in paths {
             let name = registry_name(path)?;
-            match key.get_value::<String, _>(&name) {
-                Ok(existing) if Path::new(&existing) == path => continue,
-                Ok(_) => {
-                    return Err(FontFerryError::Platform(
-                        "font registry name belongs to another file".into(),
-                    ));
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(FontFerryError::Platform(error.to_string())),
-            }
+            let persisted = registry_matches(&key, &name, path)?;
             let wide = wide_path(path);
-            // SAFETY: `wide` is NUL-terminated and remains alive for the duration of the call.
+            // Registry presence is not evidence that the current session loaded the font.
+            // Normalize any references left by a interrupted attempt before adding exactly one.
+            unload_session(&wide)?;
+            // SAFETY: `wide` is NUL-terminated and live; flags select the public session.
             let added = unsafe { AddFontResourceExW(wide.as_ptr(), 0, std::ptr::null()) };
             if added == 0 {
                 return Err(FontFerryError::Platform(format!(
@@ -561,8 +555,8 @@ mod platform {
                     path.display()
                 )));
             }
-            if let Err(error) = key.set_value(&name, &path.as_os_str()) {
-                // SAFETY: same live NUL-terminated path and matching flags as the add above.
+            if !persisted && let Err(error) = key.set_value(&name, &path.as_os_str()) {
+                // SAFETY: same path and flags as the single successful add above.
                 let removed = unsafe { RemoveFontResourceExW(wide.as_ptr(), 0, std::ptr::null()) };
                 return Err(FontFerryError::Platform(format!(
                     "registry write failed: {error}; session compensation succeeded: {}",
@@ -580,29 +574,46 @@ mod platform {
             .0;
         for path in paths {
             let name = registry_name(path)?;
-            match key.get_value::<String, _>(&name) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(FontFerryError::Platform(error.to_string())),
-                Ok(existing) if Path::new(&existing) != path => {
-                    return Err(FontFerryError::Platform(
-                        "registry ownership mismatch".into(),
-                    ));
-                }
-                Ok(_) => {}
-            }
-            let wide = wide_path(path);
-            // SAFETY: path is NUL-terminated; flags match the public session registration.
-            let removed = unsafe { RemoveFontResourceExW(wide.as_ptr(), 0, std::ptr::null()) };
-            if removed == 0 {
+            let persisted = registry_matches(&key, &name, path)?;
+            // Also remove session-only resources from an interrupted add-before-registry-write.
+            let removed = unload_session(&wide_path(path))?;
+            if removed == 0 && persisted {
                 return Err(FontFerryError::Platform(format!(
-                    "Windows could not unregister {}; keep recovery journal and retry after closing font users or signing out",
+                    "Windows could not unregister {}; keep journal and retry after closing font users or signing out",
                     path.display()
                 )));
             }
-            key.delete_value(name)
-                .map_err(|error| FontFerryError::Platform(error.to_string()))?;
+            if persisted {
+                key.delete_value(name)
+                    .map_err(|error| FontFerryError::Platform(error.to_string()))?;
+            }
         }
         Ok(())
+    }
+
+    fn registry_matches(key: &RegKey, name: &str, path: &Path) -> Result<bool> {
+        match key.get_value::<String, _>(name) {
+            Ok(existing) if Path::new(&existing) == path => Ok(true),
+            Ok(_) => Err(FontFerryError::Platform(
+                "font registry ownership mismatch".into(),
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(FontFerryError::Platform(error.to_string())),
+        }
+    }
+
+    fn unload_session(wide: &[u16]) -> Result<usize> {
+        // Microsoft documents repeated removal when outstanding resource references exist.
+        // The cap prevents an externally changing resource count from hanging recovery.
+        for removed in 0..1024 {
+            // SAFETY: callers supply a live NUL-terminated managed path and matching flags.
+            if unsafe { RemoveFontResourceExW(wide.as_ptr(), 0, std::ptr::null()) } == 0 {
+                return Ok(removed);
+            }
+        }
+        Err(FontFerryError::Platform(
+            "font resource references did not drain; recovery required".into(),
+        ))
     }
 
     pub fn refresh() -> Result<()> {
