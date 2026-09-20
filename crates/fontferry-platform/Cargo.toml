@@ -23,7 +23,7 @@ rusqlite.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sevenz-rust.workspace = true
+sevenz-rust2.workspace = true
 sha2.workspace = true
 tar.workspace = true
 tempfile.workspace = true
@@ -43,6 +43,9 @@ windows-sys = { version = "0.59", features = [
   "Win32_UI_WindowsAndMessaging",
 ] }
 winreg = "0.55"
+
+[dev-dependencies]
+sevenz-rust2 = { workspace = true, features = ["compress"] }
 
 [lints]
 workspace = true

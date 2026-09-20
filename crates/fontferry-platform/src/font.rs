@@ -61,30 +61,7 @@ fn prepare_sync(downloaded: &[PathBuf], staging_directory: &Path) -> Result<Vec<
         } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
             extract_tar_gz(path, &destination, &mut budget)?;
         } else if lower.ends_with(".7z") {
-            sevenz_rust::decompress_file_with_extract_fn(path, &destination, |entry, reader, _| {
-                let result = (|| -> Result<()> {
-                    budget.entry()?;
-                    let target = safe_target(&destination, Path::new(entry.name()))?;
-                    if entry.is_directory() {
-                        fs::create_dir_all(target).map_err(archive_error)?;
-                    } else {
-                        if let Some(parent) = target.parent() {
-                            fs::create_dir_all(parent).map_err(archive_error)?;
-                        }
-                        let mut output = File::options()
-                            .write(true)
-                            .create_new(true)
-                            .open(target)
-                            .map_err(archive_error)?;
-                        budget.copy(reader, &mut output)?;
-                    }
-                    Ok(())
-                })();
-                result
-                    .map(|()| true)
-                    .map_err(|e| sevenz_rust::Error::io(std::io::Error::other(e.to_string())))
-            })
-            .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
+            extract_7z(path, &destination, &mut budget)?;
         } else {
             return Err(FontFerryError::ArchiveRejected(format!(
                 "unsupported file '{}'",
@@ -107,6 +84,33 @@ fn prepare_sync(downloaded: &[PathBuf], staging_directory: &Path) -> Result<Vec<
         ));
     }
     Ok(prepared)
+}
+
+fn extract_7z(path: &Path, destination: &Path, budget: &mut ExtractionBudget) -> Result<()> {
+    sevenz_rust2::decompress_file_with_extract_fn(path, destination, |entry, reader, _| {
+        let result = (|| -> Result<()> {
+            budget.entry()?;
+            let target = safe_target(destination, Path::new(entry.name()))?;
+            if entry.is_directory() {
+                fs::create_dir_all(target).map_err(archive_error)?;
+            } else {
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent).map_err(archive_error)?;
+                }
+                let mut output = File::options()
+                    .write(true)
+                    .create_new(true)
+                    .open(target)
+                    .map_err(archive_error)?;
+                budget.copy(reader, &mut output)?;
+            }
+            Ok(())
+        })();
+        result
+            .map(|()| true)
+            .map_err(|e| sevenz_rust2::Error::from(std::io::Error::other(e.to_string())))
+    })
+    .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))
 }
 
 fn extract_zip(source: &Path, destination: &Path, budget: &mut ExtractionBudget) -> Result<()> {
@@ -397,5 +401,41 @@ mod budget_tests {
                 "{name}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod sevenz_tests {
+    use super::*;
+    use sevenz_rust2::{ArchiveEntry, ArchiveWriter};
+
+    #[test]
+    fn sevenz_callback_enforces_paths_output_and_cumulative_entry_budget()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let archive = directory.path().join("payload.7z");
+        let mut writer = ArchiveWriter::create(&archive)?;
+        writer.push_archive_entry(ArchiveEntry::new_file("payload.ttf"), Some(&b"sixsix"[..]))?;
+        writer.finish()?;
+        let out = directory.path().join("out");
+        assert!(extract_7z(&archive, &out, &mut ExtractionBudget::new(5, 10)).is_err());
+        assert!(fs::metadata(out.join("payload.ttf"))?.len() <= 5);
+        let mut budget = ExtractionBudget::new(100, 1);
+        extract_7z(&archive, &directory.path().join("first"), &mut budget)?;
+        assert!(extract_7z(&archive, &directory.path().join("second"), &mut budget).is_err());
+        let traversal = directory.path().join("traversal.7z");
+        let mut writer = ArchiveWriter::create(&traversal)?;
+        writer.push_archive_entry(ArchiveEntry::new_file("../escape.ttf"), Some(&b"bad"[..]))?;
+        writer.finish()?;
+        assert!(
+            extract_7z(
+                &traversal,
+                &directory.path().join("safe"),
+                &mut ExtractionBudget::new(100, 10)
+            )
+            .is_err()
+        );
+        assert!(!directory.path().join("escape.ttf").exists());
+        Ok(())
     }
 }

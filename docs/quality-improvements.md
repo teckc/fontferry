@@ -4,7 +4,7 @@
 
 - Baseline: `3b32b54efb6dbb30865bbe1266ec4e1f3cfedc00` (latest `main` checked through GitHub on 2026-09-20).
 - PRs #1–#17 were dependency updates, not fixes for these behaviors. No `AGENTS.md` was present. `CONTRIBUTING.md`, Cargo/pnpm configuration, CI and release workflows were read.
-- Toolchain retained: Rust 1.97.1, Node 24, pnpm 11.9.0. No dependency version or lockfile upgrades. The initial environment pnpm wrapper was 11.19.0; installation was repeated using `corepack pnpm` 11.9.0.
+- Toolchain retained: Rust 1.97.1, Node 24, pnpm 11.9.0. No unrelated dependency upgrades. The final audit required rustls 0.23.42 → 0.23.45 (and its required webpki update), and sevenz-rust 0.6.1 → maintained sevenz-rust2 0.23.0; Cargo.lock records only this security-related graph change. The initial environment pnpm wrapper was 11.19.0; installation was repeated using `corepack pnpm` 11.9.0.
 - Workspace: core owns policy/orchestration; platform owns SQLite/network/files/system APIs; Tauri provides CLI and commands; Svelte provides UI. CLI enters before the GUI single-instance plugin.
 - Baseline core/platform: 10 tests passed. Baseline UI: one component test passed, typecheck and build passed. Baseline formatting passed. Existing main Actions runs report success, including [run 35055432589](https://github.com/teckc/fontferry/actions/runs/35055432589).
 
@@ -46,13 +46,13 @@ The journal covers process interruption. This implementation does **not** claim 
 Local Linux checks:
 
 - `cargo fmt --all -- --check`: passed after formatting.
-- `cargo test -p fontferry-core -p fontferry-platform --locked -j 2`: passed: 26 tests (11 core, 15 platform), plus doc-test targets.
-- `cargo clippy -p fontferry-core -p fontferry-platform --all-targets --locked -j 2 -- -D warnings`: passed before final validation; rerun for final commit.
+- `cargo test -p fontferry-core -p fontferry-platform --locked -j 2`: passed: 27 tests (11 core, 16 platform), plus doc-test targets.
+- `cargo clippy -p fontferry-core -p fontferry-platform --all-targets --locked -j 2 -- -D warnings`: passed, including the dependency repair.
 - `corepack pnpm install --frozen-lockfile`: passed using pnpm 11.9.0.
 - `corepack pnpm check`, `corepack pnpm test`, `corepack pnpm build`: passed; component tests increased from 1 to 3.
-- `pnpm test:e2e`: three tests could not launch because Chromium was absent. `corepack pnpm exec playwright install chromium` retried and failed with HTTP 502/timeouts. No browser behavior is claimed validated locally.
+- `pnpm test:e2e`: three tests could not launch because Chromium was absent. `corepack pnpm exec playwright install chromium` retried and failed with HTTP 502/timeouts. No browser behavior is claimed validated locally. The remote Frontend job subsequently passed all three Playwright flows, component tests, check and build in [CI run 35516039203](https://github.com/teckc/fontferry/actions/runs/35516039203).
 - Full workspace Clippy/tests could not finish locally: `pkg-config`/WebKitGTK development dependencies are absent. `apt-get` failed on container setgroups/setuid permissions. One initial concurrent build also encountered a zero-length intermediate object; isolated core/platform builds subsequently passed.
-- `cargo xtask check` fails at workspace Clippy because pkg-config is absent. `cargo deny` was initially unavailable; installation and audit results are recorded in the PR, not suppressed.
+- `cargo xtask check` fails at workspace Clippy because pkg-config is absent. `cargo deny check` now passes with cargo-deny 0.20.2. Existing unused advisory-ignore warnings remain unchanged; no new ignore entries were added.
 
 Regression tests use real temporary directories and SQLite, injected system registration/refresh/copy/delete failures, and independent OS processes. They cover repeated installation, overlapping payloads, partial copy/registration, unregister/refresh failure, SQLite commit failure, cleanup retry, missing/empty/corrupt rollback materials, version entitlement checks, dashboard derivation and fingerprint changes. Lock tests run a holder process, a competing process and another process after the holder is killed. Reconstructing an installer for journal recovery validates persistence, but is not a real power-loss experiment. No test operates on a real user font directory or scheduler.
 
@@ -65,3 +65,7 @@ Regression tests use real temporary directories and SQLite, injected system regi
 - **UI/Tauri:** Playwright remains blocked locally, and full Tauri compilation requires CI/system dependencies. The UI tests validate mocked IPC behavior; core/platform tests separately exercise actual Rust data/state behavior. SQLite calls remain synchronous behind a short mutex; large installer I/O and scheduler commands were the blocking paths moved off async workers.
 
 Microsoft primary references: [AddFontResourceExW](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-addfontresourceexw), [RemoveFontResourceExW](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-removefontresourceexw). These describe private/public session behavior, registry persistence requirements, matching flags and in-use font limitations; they are not substitutes for per-user Windows acceptance.
+
+## Audit-driven dependency repair
+
+The first Draft PR CI audit failed on [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html) (rustls), [RUSTSEC-2026-0245](https://rustsec.org/advisories/RUSTSEC-2026-0245.html) and [RUSTSEC-2026-0246](https://rustsec.org/advisories/RUSTSEC-2026-0246.html) (sevenz-rust). These are relevant download/extraction dependencies, so they were repaired rather than ignored. The 7z callback still validates original entry paths and enforces the shared budget. A real, tiny 7z archive regression test now covers output limits, cumulative entry limits and path traversal with the replacement decoder. Production enables only the extraction utility feature; compression is a test-only dependency feature used to generate controlled archives.
