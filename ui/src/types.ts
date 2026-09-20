@@ -44,6 +44,8 @@ export interface InstalledFont {
 }
 
 export interface UpdateStatus {
+  checkedAt?: string | null;
+  fromCache?: boolean;
   fontId: string;
   currentVersion: string | null;
   availableVersion: string | null;
@@ -60,6 +62,7 @@ export interface Activity {
 }
 
 export interface Dashboard {
+  scheduleEnabled?: boolean;
   fonts: FontDefinition[];
   installed: InstalledFont[];
   statuses: UpdateStatus[];
