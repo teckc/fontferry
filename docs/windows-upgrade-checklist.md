@@ -45,3 +45,43 @@ Use a snapshotted Windows VM with a dedicated disposable local standard user, no
 - Complete MSVC build, fresh install, upgrade and uninstall matrix. No installer compatibility sign-off until these pass.
 
 Sources: https://github.com/tauri-apps/tauri/tree/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis ; project paths.rs/install.rs/schedule.rs; directories-rs Windows path construction (https://github.com/dirs-dev/directories-rs/blob/master/src/win.rs).
+
+## Ownership and interrupted recovery review (2026-11-14)
+
+Reviewed on commit 9a95a83; this section changes documentation only. Source evidence: state.rs (WAL and installed_fonts), install.rs::backup/begin/recover/resolve/uninstall, engine.rs::uninstall/uninstall_inner, commands.rs::dashboard and cli.rs::run_cli. No live database was opened and no font operation was run.
+
+### Four separate objects, not one delete-settings switch
+
+| Object | Examples | Safe intended treatment |
+| --- | --- | --- |
+| Application | executable, shortcuts, uninstall registration | Ordinary app removal does not imply font removal or ledger reset. |
+| Managed fonts | owned_files and their Windows font registrations | Remove only through ownership-aware font operations; never clear the whole user Fonts directory. |
+| Management state | fontferry.db, source/settings/license/ownership records, previous snapshot references | Preserve when retaining fonts. It is operational state, not disposable preferences. |
+| Unfinished recovery set | font-operation.json, coherent database state, backup files + manifest.json, affected font files | Preserve together until recovery is resolved and verified. Do not treat these as cache. |
+
+The SQLite installed_fonts JSON record carries owned_files, version/variants and previous snapshot reference. A backup contains copies of the previously owned fonts plus manifest.json with hashes. The operation journal records old state, old hashes, target hashes and the backup. resolve() verifies the recovery plan and file hashes before mutation and removes the journal only after successful finalization. GUI dashboard and CLI startup call recovery, so a later ordinary launch can act on retained recovery state.
+
+### Concrete loss-of-state failure modes
+
+1. Delete the database but keep installed fonts, with no journal: the application loses its ownership/version/snapshot linkage. A generic filesystem scan is not an equivalent reconstruction of the ledger. Do not silently adopt or remove those files by guessed filenames.
+2. Delete the database but retain an unfinished uninstall journal: recover() treats `(operation.version=None, installed=None)` as committed. A newly recreated empty database can therefore make a previously uncommitted uninstall look committed, and resolve() can finish removing the journal's old font files. This is a code-path inference, NOT an executed reproduction. It is a reason to forbid partial cleanup, not to rely on recovery failing closed in every missing-database case.
+3. Delete the database but retain an update journal: the current DB may match neither the old nor new record; recovery reports manual repair. Losing the ledger is not repaired by retaining only font files.
+4. Delete the journal while a font operation is unfinished: the automatic recovery trigger and operation context disappear; stale files/registrations can remain while the ledger reflects a different phase.
+5. Delete a referenced snapshot: rollback or interrupted-operation recovery can no longer restore verified old bytes. The current resolver reports missing/corrupt backup and preserves evidence rather than inventing data.
+6. Copy only fontferry.db while a writer is live: SQLite is configured for WAL; committed transactions may still reside in its WAL. Use a verified consistent SQLite backup or stop all writers and capture a coherent state set. Do not delete a WAL or SHM file as generic cleanup while the database is active.
+
+### Additional isolated test cases (NOT executed)
+
+Add fault-injection cases to the mock FontSystem harness, then run equivalent lifecycle tests only in a disposable VM/account. Capture state before/after each boundary; do not fabricate a successful recovery result.
+
+- Uninstall interrupted after journal persistence/unregistration but before SQLite record deletion: restart must preserve/restore the old installation and registrations, then finish recovery consistently.
+- Uninstall interrupted after SQLite record deletion but before finish(): restart must complete only the selected font's removal and clear the journal; an unrelated control font remains unchanged.
+- Install/update interrupted before and after SQLite commit: verify old-versus-new state selection, hash checks, registration state and retained rollback snapshot.
+- Missing database + retained uninstall journal: explicitly reproduce the misclassification above using temp paths/mock fonts. Treat destructive cleanup of the database in this state as disallowed product behavior, even if the current resolver follows its existing committed branch.
+- Missing/corrupt database, malformed journal, missing/corrupt snapshot and externally modified font: retain the evidence set and expose a repair path; do not add automatic broad cleanup.
+- App uninstall/reinstall while a valid recovery journal exists: recovery data and the font set must survive app removal unchanged. Reinstalled app must resolve from coherent retained state, not from an empty replacement ledger.
+- Settings-only reset with installed fonts: ownership, rollback linkage, license records required for operation, and unfinished recovery must not be erased. A future preferences reset needs selective settings handling, not database deletion.
+- Intentional complete removal: first resolve unfinished recovery, then explicitly remove selected managed fonts through the engine, verify no pending journal/remaining ownership, and only then separately confirm management-data cleanup. Keep unrelated fonts untouched. If the user intends to keep fonts, retain coherent management state rather than calling its destruction a harmless reset.
+- Scheduled/headless writer during cleanup: prevent races by stopping the installation-owned task/writer and acquiring the same operation lock before any future cleanup. A running GUI is not the only possible writer.
+
+Release gate: no new data-clearing hook or reset feature until these invariants are implemented and tested. The current generic NSIS data checkbox mismatch remains a separate UX defect; simply changing its deletion path to ProjectDirs would introduce a more dangerous state-loss bug.
