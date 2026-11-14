@@ -49,7 +49,6 @@
         "installerIcon": "icons/icon.ico"
       }
     },
-    "publisher": "teckc",
     "macOS": {
       "dmg": {
         "appPosition": {
