@@ -174,3 +174,54 @@ test("failed removal keeps details and shows the failure in the drawer", async (
   expect(screen.getByRole("button", { name: "卸载字渡管理的文件" })).toBeEnabled();
   vi.mocked(window.confirm).mockRestore();
 });
+
+test("restores saved beta channel after UI remount", async () => {
+  vi.mocked(invoke).mockResolvedValue({ fonts: [], installed: [], statuses: [], activities: [], updateChannel: "beta" });
+  const first = render(App);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("dashboard"));
+  await fireEvent.click(screen.getByRole("button", { name: "⚙设置" }));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "程序更新通道" })).toHaveValue("beta"));
+  first.unmount();
+  render(App);
+  await fireEvent.click(screen.getByRole("button", { name: "⚙设置" }));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "程序更新通道" })).toHaveValue("beta"));
+});
+
+test("missing saved channel defaults to stable", async () => {
+  vi.mocked(invoke).mockResolvedValue({ fonts: [], installed: [], statuses: [], activities: [] });
+  render(App);
+  await fireEvent.click(screen.getByRole("button", { name: "⚙设置" }));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "程序更新通道" })).toHaveValue("stable"));
+});
+
+test("channel selection saves before remount without checking for updates", async () => {
+  let saved = "stable";
+  vi.mocked(invoke).mockImplementation(async (command, args: any) => {
+    if (command === "set_update_channel") { saved = args.channel; return; }
+    return { fonts: [], installed: [], statuses: [], activities: [], updateChannel: saved };
+  });
+  const first = render(App);
+  await fireEvent.click(screen.getByRole("button", { name: "⚙设置" }));
+  const select = screen.getByRole("combobox", { name: "程序更新通道" });
+  await fireEvent.change(select, { target: { value: "beta" } });
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_update_channel", { channel: "beta" }));
+  await waitFor(() => expect(select).not.toBeDisabled());
+  first.unmount();
+  render(App);
+  await fireEvent.click(screen.getByRole("button", { name: "⚙设置" }));
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "程序更新通道" })).toHaveValue("beta"));
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "check_app_update")).toBe(false);
+});
+
+test("failed channel save restores previous choice", async () => {
+  vi.mocked(invoke).mockImplementation(async command => {
+    if (command === "set_update_channel") throw new Error("channel save failed");
+    return { fonts: [], installed: [], statuses: [], activities: [], updateChannel: "stable" };
+  });
+  render(App);
+  await fireEvent.click(screen.getByRole("button", { name: "⚙设置" }));
+  const select = screen.getByRole("combobox", { name: "程序更新通道" });
+  await fireEvent.change(select, { target: { value: "beta" } });
+  await waitFor(() => expect(select).toHaveValue("stable"));
+  expect(await screen.findByRole("alert")).toHaveTextContent("channel save failed");
+});

@@ -35,6 +35,8 @@
   let sourceHomepage = "";
   let manualVersion = "";
   let updateChannel = "stable";
+  let channelLoaded = false;
+  let savingChannel = false;
   let appUpdateAvailable = false;
   let theme: Theme = "system";
   let operation: Operation | null = null;
@@ -68,12 +70,33 @@
     applyTheme();
   }
 
+  async function changeUpdateChannel() {
+    if (savingChannel || operation) return;
+    const previous = data.updateChannel ?? "stable";
+    savingChannel = true;
+    error = "";
+    appUpdateAvailable = false;
+    try {
+      await invoke("set_update_channel", { channel: updateChannel });
+      data.updateChannel = updateChannel === "beta" ? "beta" : "stable";
+    } catch (cause) {
+      updateChannel = previous;
+      error = String(cause);
+    } finally {
+      savingChannel = false;
+    }
+  }
+
   async function load() {
     loading = true;
     error = "";
     try {
       data = await invoke<Dashboard>("dashboard");
       scheduleEnabled = data.scheduleEnabled ?? false;
+      if (!channelLoaded) {
+        updateChannel = data.updateChannel === "beta" ? "beta" : "stable";
+        channelLoaded = true;
+      }
     } catch (cause) {
       error = String(cause);
     } finally {
@@ -280,6 +303,7 @@
       }
       error = String(cause);
       scheduleEnabled = data.scheduleEnabled ?? false;
+
     }
   }
 
@@ -303,7 +327,7 @@
   }
 
   async function checkAppUpdate() {
-    if (operation) return;
+    if (operation || savingChannel) return;
     operation = {
       kind: "check-app",
       title: "正在检查字渡更新",
@@ -329,7 +353,7 @@
   }
 
   async function installAppUpdate() {
-    if (operation) return;
+    if (operation || savingChannel) return;
     operation = {
       kind: "install-app",
       title: "正在下载字渡更新",
@@ -563,7 +587,7 @@
         </article>
         <article class="panel">
           <h2>程序更新</h2>
-          <div class="setting-row"><span><strong>更新通道</strong><small>稳定版更可靠；测试版可以提前体验新功能</small></span><select bind:value={updateChannel}><option value="stable">稳定版</option><option value="beta">测试版</option></select></div>
+          <div class="setting-row"><span><strong>更新通道</strong><small>稳定版更可靠；测试版可以提前体验新功能</small></span><select aria-label="程序更新通道" bind:value={updateChannel} onchange={changeUpdateChannel} disabled={operation !== null || savingChannel}><option value="stable">稳定版</option><option value="beta">测试版</option></select></div>
           <button class="primary" onclick={checkAppUpdate} disabled={operation !== null}>
             {#if operation?.kind === "check-app"}<span class="button-spinner"></span>{/if}
             {operation?.kind === "check-app" ? "正在检查…" : "检查程序更新"}

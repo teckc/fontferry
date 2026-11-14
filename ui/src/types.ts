@@ -62,6 +62,7 @@ export interface Activity {
 }
 
 export interface Dashboard {
+  updateChannel?: "stable" | "beta";
   scheduleEnabled?: boolean | null;
   fonts: FontDefinition[];
   installed: InstalledFont[];

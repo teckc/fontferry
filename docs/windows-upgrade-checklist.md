@@ -106,3 +106,13 @@ Interpretation: the stable metadata endpoint is currently unavailable for this R
 5. A future stable Rust release can provide a correct manifest at stable latest after its normal release checks. Do not attach misleading alpha metadata to the unrelated v0.1.0 release as an unreviewed shortcut.
 
 Local tests added: separate stable/beta contract and alpha.5 public-key continuity. Together with installer/manifest tests, 8 tests pass. These static assertions are explicitly not signature verification or client update tests.
+
+## Saved update-channel correction
+
+Source review found that check_app_update wrote update-channel into SQLite, but Dashboard did not return it and App.svelte initialized stable on each mount. This demonstrates a missing restore path in source; no real alpha.5 client was launched to measure the symptom.
+
+The candidate now returns a validated saved channel in Dashboard, restores it on initial UI load, and saves a channel selection through set_update_channel without making a network update request. Invalid choices are rejected before persistence; absent/unsupported saved strings default to stable. Failed saves restore the previous selection and show the error. Channel changes clear an old update-available indication, and update actions are guarded while a channel save is pending.
+
+Verification: 14 mocked UI tests pass, including selection-save-remount, existing beta restore, missing-setting fallback and failed-save rollback. Svelte check reports no errors/warnings and the frontend production build passes. The eight release/installer static tests also pass. Rust compilation remains blocked by missing MSVC; no claim is made that SQLite persistence was exercised through a compiled desktop binary.
+
+Remaining isolated acceptance test: in a disposable Windows profile, choose beta without checking the network, quit/relaunch and confirm beta persists; repeat stable and verify restart; fail the settings write and confirm the old choice is restored; check that the eventual update request uses the displayed channel. Do not change the owner's real settings for this test.
