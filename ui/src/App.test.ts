@@ -39,7 +39,7 @@ test("restores installed variants rather than catalog defaults", async () => {
   expect(screen.getByRole("checkbox", { name: /已选包/ })).toBeChecked();
   expect(screen.getByRole("checkbox", { name: /默认包/ })).not.toBeChecked();
   await fireEvent.click(screen.getByRole("checkbox", { name: /已选包/ }));
-  expect(screen.getByRole("button", { name: "安装或更新" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /安装字体|更新字体|更改字体包|重新安装/ })).toBeDisabled();
 });
 
 test("failed schedule change restores persisted checkbox state", async () => {
@@ -75,7 +75,7 @@ test("open font details refresh after installation without reopening", async () 
   await fireEvent.click(screen.getByRole("button", { name: "Aa字体" }));
   await fireEvent.click(screen.getByRole("button", { name: new RegExp(font.name) }));
   expect(screen.getByRole("dialog")).toHaveTextContent("1.0");
-  await fireEvent.click(screen.getByRole("button", { name: "安装或更新" }));
+  await fireEvent.click(screen.getByRole("button", { name: /安装字体|更新字体|更改字体包|重新安装/ }));
   await waitFor(() => expect(screen.getByRole("dialog")).not.toHaveTextContent("1.0"));
   expect(screen.getByRole("dialog")).toHaveTextContent("2.0");
 });
@@ -91,7 +91,7 @@ test("legacy empty variants resolve defaults only when opening details", async (
   const checkbox = screen.getByRole("checkbox", { name: /默认包/ });
   expect(checkbox).toBeChecked();
   await fireEvent.click(checkbox);
-  expect(screen.getByRole("button", { name: "安装或更新" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /安装字体|更新字体|更改字体包|重新安装/ })).toBeDisabled();
 });
 
 
@@ -102,4 +102,75 @@ test("pending scheduler operation is displayed as unknown after reload", async (
   await fireEvent.click(screen.getByRole("button", { name: "⚙设置" }));
   expect(screen.getByRole("status")).toHaveTextContent("实际状态尚未确认");
   expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
+});
+
+async function openCatalog() {
+  await waitFor(() => expect(screen.queryByText("正在读取字体状态…")).not.toBeInTheDocument());
+  await fireEvent.click(screen.getByRole("button", { name: "Aa字体" }));
+}
+
+test("filters management status together with search and clears empty results", async () => {
+  const first = { ...catalog.fonts[0], id: "alpha", name: "Alpha" };
+  const second = { ...catalog.fonts[0], id: "beta", name: "Beta" };
+  vi.mocked(invoke).mockResolvedValue({ fonts: [second, first], installed: [{ fontId: "alpha", version: "1", variantIds: [], previous: null }], statuses: [], activities: [] });
+  render(App);
+  await openCatalog();
+  await fireEvent.change(screen.getByLabelText("管理状态"), { target: { value: "managed" } });
+  expect(screen.getByRole("button", { name: /Alpha/ })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Beta/ })).not.toBeInTheDocument();
+  await fireEvent.input(screen.getByLabelText("搜索字体"), { target: { value: "Beta" } });
+  expect(screen.getByText("没有符合条件的字体")).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
+  expect(screen.getByRole("button", { name: /Beta/ })).toBeInTheDocument();
+});
+
+test("requires real license consent and resets it when details reopen", async () => {
+  const font = { ...catalog.fonts[0], license: { ...catalog.fonts[0].license, requiresAcceptance: true } };
+  vi.mocked(invoke).mockResolvedValue({ fonts: [font], installed: [], statuses: [], activities: [] });
+  render(App);
+  await openCatalog();
+  await fireEvent.click(screen.getByRole("button", { name: new RegExp(font.name) }));
+  expect(screen.getByRole("button", { name: "安装字体" })).toBeDisabled();
+  await fireEvent.click(screen.getByRole("checkbox", { name: "我已阅读并同意此字体的许可协议" }));
+  expect(screen.getByRole("button", { name: "安装字体" })).toBeEnabled();
+  await fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+  await fireEvent.click(screen.getByRole("button", { name: new RegExp(font.name) }));
+  expect(screen.getByRole("button", { name: "安装字体" })).toBeDisabled();
+  await fireEvent.click(screen.getByRole("checkbox", { name: "我已阅读并同意此字体的许可协议" }));
+  await fireEvent.click(screen.getByRole("button", { name: "安装字体" }));
+  expect(invoke).toHaveBeenCalledWith("install_font", { input: expect.objectContaining({ acceptLicense: true, fontId: font.id }) });
+});
+
+test("disables removal and rollback while installation is pending", async () => {
+  const font = { ...catalog.fonts[0], license: { ...catalog.fonts[0].license, requiresAcceptance: false } };
+  let finish: () => void = () => {};
+  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "install_font") return pending;
+    return { fonts: [font], installed: [{ fontId: font.id, version: "1", variantIds: [font.variants[0].id], previous: { version: "0.9" }, ownedFiles: ["sample.ttf"] }], statuses: [], activities: [] };
+  });
+  render(App);
+  await openCatalog();
+  await fireEvent.click(screen.getByRole("button", { name: new RegExp(font.name) }));
+  await fireEvent.click(screen.getByRole("button", { name: "重新安装" }));
+  expect(screen.getByRole("button", { name: "恢复至 0.9" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "卸载字渡管理的文件" })).toBeDisabled();
+  finish();
+  await waitFor(() => expect(screen.getByRole("button", { name: "重新安装" })).toBeEnabled());
+});
+
+test("failed removal keeps details and shows the failure in the drawer", async () => {
+  const font = catalog.fonts[0];
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "uninstall_font") throw new Error("file is busy");
+    return { fonts: [font], installed: [{ fontId: font.id, version: "1", variantIds: [font.variants[0].id], previous: null }], statuses: [], activities: [] };
+  });
+  render(App);
+  await openCatalog();
+  await fireEvent.click(screen.getByRole("button", { name: new RegExp(font.name) }));
+  await fireEvent.click(screen.getByRole("button", { name: "卸载字渡管理的文件" }));
+  expect(screen.getByRole("dialog")).toHaveTextContent("file is busy");
+  expect(screen.getByRole("button", { name: "卸载字渡管理的文件" })).toBeEnabled();
+  vi.mocked(window.confirm).mockRestore();
 });

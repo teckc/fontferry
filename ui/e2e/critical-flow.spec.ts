@@ -111,10 +111,22 @@ test("shows progress while downloading and installing a font", async ({ page }) 
   await page.getByRole("button", { name: /Maple Mono/ }).click();
 
   const dialog = page.getByRole("dialog", { name: "Maple Mono" });
-  await dialog.getByRole("button", { name: "安装或更新" }).click();
+  await dialog.getByRole("button", { name: /安装字体|更新字体|更改字体包|重新安装/ }).click();
 
   await expect(page.getByTestId("operation-status")).toContainText("正在安装 Maple Mono");
   await expect(dialog.getByRole("button", { name: "正在安装…" })).toBeDisabled();
-  await expect(page.getByText("安装完成")).toBeVisible();
+  await expect(dialog.getByText("安装完成")).toBeVisible();
   await expect(page.getByTestId("operation-status")).toBeHidden();
+});
+
+test("filters the catalog and clears an empty result", async ({ page }, testInfo) => {
+  await page.goto("/");
+  await page.getByRole("navigation").getByRole("button", { name: /Aa\s*字体/ }).click();
+  await page.getByLabel("管理状态").selectOption("managed");
+  await expect(page.getByText("没有符合条件的字体")).toBeVisible();
+  await page.getByRole("button", { name: "清除筛选" }).click();
+  await expect(page.getByRole("button", { name: /Maple Mono/ })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("catalog.png"), fullPage: true });
+  await page.getByRole("button", { name: /Maple Mono/ }).click();
+  await page.screenshot({ path: testInfo.outputPath("font-details.png"), fullPage: true });
 });

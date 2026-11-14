@@ -22,6 +22,9 @@
   let error = "";
   let query = "";
   let policy = "all";
+  let management = "all";
+  let sortOrder = "name";
+  let licenseAccepted = false;
   let selectedVariants: string[] = [];
   let scheduleEnabled = false;
   let sourceKind = "github";
@@ -88,6 +91,7 @@
 
   function openFont(font: FontDefinition) {
     selected = font;
+    licenseAccepted = false;
     const savedVariants = installed(font.id)?.variantIds;
     selectedVariants = savedVariants?.length ? savedVariants.slice() : font.variants.filter((variant) => variant.default).map((variant) => variant.id);
     message = "";
@@ -151,7 +155,7 @@
   }
 
   async function install(font: FontDefinition) {
-    if (operation) return;
+    if (operation || (font.license.requiresAcceptance && !licenseAccepted)) return;
     operation = {
       kind: "install-font",
       title: `正在安装 ${font.name}`,
@@ -165,7 +169,7 @@
           fontId: font.id,
           version: status(font.id)?.availableVersion ?? null,
           variantIds: selectedVariants,
-          acceptLicense: true,
+          acceptLicense: licenseAccepted,
         },
       });
       message = "安装完成";
@@ -179,23 +183,36 @@
   }
 
   async function remove(font: FontDefinition) {
+    if (operation) return;
     if (!window.confirm(`卸载由字渡安装的 ${font.name}？`)) return;
+    operation = { kind: "remove-font", title: `正在卸载 ${font.name}`, detail: "只移除由字渡管理的字体文件。" };
+    error = "";
+    message = "";
     try {
       await invoke("uninstall_font", { fontId: font.id });
       selected = null;
       await load();
+      message = "已卸载字渡管理的字体文件";
     } catch (cause) {
       error = String(cause);
+    } finally {
+      operation = null;
     }
   }
 
   async function rollback(font: FontDefinition) {
+    if (operation) return;
+    operation = { kind: "rollback-font", title: `正在恢复 ${font.name}`, detail: "正在恢复上一版本，请稍候。" };
+    error = "";
+    message = "";
     try {
       await invoke("rollback_font", { fontId: font.id });
       message = "已恢复上一版本";
       await load();
     } catch (cause) {
       error = String(cause);
+    } finally {
+      operation = null;
     }
   }
 
@@ -250,10 +267,11 @@
     try {
       error = "";
       message = "";
-      message = await invoke<string>("set_schedule", {
+      await invoke<string>("set_schedule", {
         input: { enabled: scheduleEnabled },
       });
       data.scheduleEnabled = scheduleEnabled;
+      message = scheduleEnabled ? "每日自动更新已启用" : "每日自动更新已关闭";
     } catch (cause) {
       try {
         data = await invoke<Dashboard>("dashboard");
@@ -266,6 +284,10 @@
   }
 
   async function saveManualVersion(font: FontDefinition) {
+    if (operation) return;
+    error = "";
+    message = "";
+    operation = { kind: "save-version", title: "正在保存版本", detail: font.name };
     try {
       await invoke("set_manual_version", {
         fontId: font.id,
@@ -275,6 +297,8 @@
       await load();
     } catch (cause) {
       error = String(cause);
+    } finally {
+      operation = null;
     }
   }
 
@@ -349,10 +373,19 @@
 
   $: filteredFonts = data.fonts.filter((font) => {
     const text = `${font.name} ${font.id} ${font.description}`.toLowerCase();
+    const managed = data.installed.some((item) => item.fontId === font.id);
+    const hasUpdate = data.statuses.some((item) => item.fontId === font.id && item.updateAvailable);
     return (
-      text.includes(query.toLowerCase()) &&
+      text.includes(query.trim().toLowerCase()) &&
+      (management === "all" || (management === "managed" && managed) || (management === "unmanaged" && !managed) || (management === "updates" && hasUpdate)) &&
       (policy === "all" || font.deliveryPolicy === policy)
     );
+  }).sort((left, right) => {
+    if (sortOrder === "updates") {
+      const delta = Number(data.statuses.some((item) => item.fontId === right.id && item.updateAvailable)) - Number(data.statuses.some((item) => item.fontId === left.id && item.updateAvailable));
+      if (delta) return delta;
+    }
+    return left.name.localeCompare(right.name, "zh-CN", { numeric: true });
   });
   $: updateCount = data.statuses.filter((item) => item.updateAvailable).length;
   $: autoCount = data.statuses.filter(
@@ -443,14 +476,25 @@
         </div>
       </section>
     {:else if page === "catalog"}
-      <section class="toolbar">
+      <section class="toolbar catalog-toolbar">
         <input aria-label="搜索字体" bind:value={query} placeholder="搜索字体、ID 或描述…" />
+        <select aria-label="管理状态" bind:value={management}>
+          <option value="all">全部字体</option>
+          <option value="managed">字渡管理</option>
+          <option value="updates">有可用更新</option>
+          <option value="unmanaged">未由字渡管理</option>
+        </select>
+        <select aria-label="排序方式" bind:value={sortOrder}>
+          <option value="name">名称排序</option>
+          <option value="updates">更新优先</option>
+        </select>
         <select aria-label="更新方式" bind:value={policy}>
           <option value="all">全部更新方式</option>
           <option value="autoInstall">可直接更新</option>
           <option value="notifyOnly">需要手动更新</option>
         </select>
       </section>
+      <p class="catalog-summary">显示 {filteredFonts.length} / {data.fonts.length} 个字体来源 · 已由字渡管理 {data.installed.length} 个</p>
       <section class="catalog-grid">
         {#each filteredFonts as font}
           {@const current = installed(font.id)}
@@ -466,10 +510,12 @@
             <code>{font.id}</code>
             <p>{font.description}</p>
             <footer>
-              <span>{current ? `已安装 ${current.version}` : "未安装"}</span>
+              <span>{current ? `已管理 ${current.version}` : "未由字渡管理"}</span>
               {#if update?.updateAvailable}<strong>有更新</strong>{/if}
             </footer>
           </button>
+        {:else}
+          <div class="empty catalog-empty"><strong>没有符合条件的字体</strong><p>试试其他名称，或清除筛选条件。</p><button class="quiet" onclick={() => { query = ""; policy = "all"; management = "all"; }}>清除筛选</button></div>
         {/each}
       </section>
     {:else if page === "sources"}
@@ -492,7 +538,7 @@
           {:else}
             <label>公开 HTTPS 地址<input bind:value={sourceHomepage} placeholder="https://example.com/font/" /></label>
           {/if}
-          <button class="primary" onclick={saveSource} disabled={!sourceId || !sourceName}>检查并保存</button>
+          <button class="primary" onclick={saveSource} disabled={!sourceId || !sourceName}>保存来源</button>
         </article>
         <article class="panel guidance">
           <h2>添加前请确认</h2>
@@ -510,9 +556,9 @@
     {:else if page === "settings"}
       <section class="settings">
         <article class="panel">
-          <h2>每日检查</h2>
+          <h2>每日自动更新</h2>
           {#if data.scheduleEnabled === null}<p role="status">上次计划任务操作未完成，实际状态尚未确认。请选择目标状态并重新保存。</p>{/if}
-          <label class="switch-row"><span><strong>每天自动检查字体更新</strong><small>即使字渡没有打开，也会按时检查</small></span><input type="checkbox" bind:checked={scheduleEnabled} /></label>
+          <label class="switch-row"><span><strong>每天自动更新已管理的字体</strong><small>自动安装字渡管理字体的可用更新；只提醒的来源不会自动安装。关闭窗口后仍会运行。</small></span><input type="checkbox" bind:checked={scheduleEnabled} /></label>
           <button class="primary" onclick={setSchedule}>保存</button>
         </article>
         <article class="panel">
@@ -554,4 +600,4 @@
   </main>
 </div>
 
-<FontDetails bind:selected bind:selectedVariants bind:manualVersion {operation} installedFonts={data.installed} statuses={data.statuses} {toggleVariant} {check} {install} {remove} {rollback} {saveManualVersion} />
+<FontDetails bind:selected bind:selectedVariants bind:manualVersion bind:licenseAccepted {message} {error} {operation} installedFonts={data.installed} statuses={data.statuses} {toggleVariant} {check} {install} {remove} {rollback} {saveManualVersion} />
