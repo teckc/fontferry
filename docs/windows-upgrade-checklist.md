@@ -85,3 +85,24 @@ Add fault-injection cases to the mock FontSystem harness, then run equivalent li
 - Scheduled/headless writer during cleanup: prevent races by stopping the installation-owned task/writer and acquiring the same operation lock before any future cleanup. A running GUI is not the only possible writer.
 
 Release gate: no new data-clearing hook or reset feature until these invariants are implemented and tested. The current generic NSIS data checkbox mismatch remains a separate UX defect; simply changing its deletion path to ProjectDirs would introduce a more dangerous state-loss bug.
+
+## Existing alpha updater reachability (2026-11-14 UTC)
+
+Read-only HTTP checks and source comparison, not an installed-client execution:
+
+- GitHub releases/latest redirects to v0.1.0. Its expanded assets list contains FontFerry-osx-arm64.tar.gz, FontFerry-osx-x64.tar.gz and FontFerry-win-x64.zip, no latest.json. GET releases/latest/download/latest.json returned HTTP 404.
+- GET releases/download/beta/latest.json returned HTTP 200, version 0.2.0-alpha.5, keys linux-x86_64, darwin-universal, windows-x86_64. The nonstandard macOS key is already corrected by this branch's generator for future releases; no remote asset was modified.
+- alpha.5 tauri.conf.json defaults to the stable latest endpoint, BUT its src/lib.rs::update_endpoint already offers stable and beta, and its settings UI lets the user select beta (default stable). The current refactored commands.rs preserves these endpoints.
+- The current candidate has the same updater public key as alpha.5. Equality does not prove that a new artifact was correctly signed or that its private signing key is available. No private key was accessed.
+
+Interpretation: the stable metadata endpoint is currently unavailable for this Rust alpha's update flow. It is incorrect to infer that all old alpha clients have no upgrade route: the existing beta selector supplies another route. It currently advertises the same version, not a newer security-fixed build. No exact old-client error screen, signature verification or installation outcome has been tested.
+
+### Signed old-client upgrade and direct-installer fallback
+
+1. After explicit release approval, build a higher candidate version, using the existing installer identity and the signing key corresponding to alpha.5's embedded public verifier. Do not rotate keys casually, disable signature checks, or rename a prerelease as stable just to make GitHub latest resolve.
+2. Publish immutable versioned artifacts completely before updating the opt-in beta manifest; manifest URLs should refer to that immutable release. Check HTTP status, four supported OS-ARCH keys, version monotonicity and downloadable signature/artifact pairs. Re-fetch the beta endpoint after publication.
+3. In a disposable Windows account, install the real alpha.5 package and use its settings to select beta. Verify detection, download, actual signature acceptance and upgrade with retained state. Also test tampered artifact/signature rejection in an isolated test channel; never tamper production assets. macOS Intel and Apple Silicon need separate coverage.
+4. If the old client cannot use that route, provide the named, versioned Windows NSIS installer as the fallback, not the repository's generic latest link pointing to v0.1.0. Verify provenance/checksum and platform signing state. Test an in-place install over alpha.5; do not instruct users to clear their font ledger or uninstall first.
+5. A future stable Rust release can provide a correct manifest at stable latest after its normal release checks. Do not attach misleading alpha metadata to the unrelated v0.1.0 release as an unreviewed shortcut.
+
+Local tests added: separate stable/beta contract and alpha.5 public-key continuity. Together with installer/manifest tests, 8 tests pass. These static assertions are explicitly not signature verification or client update tests.
