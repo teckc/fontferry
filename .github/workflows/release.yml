@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  checks: write
   id-token: write
   attestations: write
 
@@ -15,8 +16,12 @@ env:
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
 jobs:
+  quality:
+    uses: ./.github/workflows/ci.yml
+
   build:
     name: Bundle (${{ matrix.platform }})
+    needs: quality
     environment: release
     strategy:
       fail-fast: false
@@ -93,6 +98,7 @@ jobs:
 
   sbom:
     name: CycloneDX SBOM
+    needs: quality
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -132,31 +138,7 @@ jobs:
           \) -print0 | sort -z | xargs -0 sha256sum > release-artifacts/SHA256SUMS
       - name: Generate Tauri updater manifest
         run: |
-          tag="${GITHUB_REF_NAME}"
-          platforms='{}'
-          while IFS= read -r signature_file; do
-            artifact="${signature_file%.sig}"
-            test -f "$artifact" || continue
-            name="$(basename "$artifact")"
-            case "$name" in
-              *setup.exe) platform="windows-x86_64" ;;
-              *app.tar.gz) platform="darwin-universal" ;;
-              *AppImage*) platform="linux-x86_64" ;;
-              *) continue ;;
-            esac
-            signature="$(tr -d '\r\n' < "$signature_file")"
-            url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${name}"
-            platforms="$(jq --arg platform "$platform" --arg signature "$signature" --arg url "$url" \
-              '. + {($platform): {signature: $signature, url: $url}}' <<<"$platforms")"
-          done < <(find release-artifacts -type f -name '*.sig' | sort)
-          test "$(jq 'length' <<<"$platforms")" -eq 3
-          jq -n \
-            --arg version "${tag#v}" \
-            --arg notes "See the GitHub release notes for ${tag}." \
-            --arg pub_date "$(date --utc +%Y-%m-%dT%H:%M:%SZ)" \
-            --argjson platforms "$platforms" \
-            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
-            > release-artifacts/latest.json
+          node scripts/updater-manifest.mjs release-artifacts "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
           sha256sum release-artifacts/latest.json >> release-artifacts/SHA256SUMS
       - name: Create release
         env:
@@ -165,7 +147,7 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           prerelease=()
           if [[ "$tag" == *-* ]]; then prerelease=(--prerelease); fi
-          gh release create "$tag" --verify-tag --generate-notes "${prerelease[@]}"
+          gh release create "$tag" --draft --verify-tag --generate-notes "${prerelease[@]}"
           mapfile -d '' artifacts < <(
             find release-artifacts -type f \( \
               -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o \
@@ -175,6 +157,7 @@ jobs:
           )
           artifacts+=(release-artifacts/latest.json release-artifacts/SHA256SUMS)
           gh release upload "$tag" "${artifacts[@]}"
+          gh release edit "$tag" --draft=false
           if [[ "$tag" == *-alpha* || "$tag" == *-beta* ]]; then
             gh release view beta >/dev/null 2>&1 || \
               gh release create beta --target "$GITHUB_SHA" --prerelease --title "FontFerry beta channel"

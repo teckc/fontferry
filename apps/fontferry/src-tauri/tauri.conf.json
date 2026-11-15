@@ -39,7 +39,30 @@
     "license": "Apache-2.0",
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "languages": [
+          "English",
+          "SimpChinese",
+          "TradChinese"
+        ],
+        "displayLanguageSelector": true,
+        "installerIcon": "icons/icon.ico"
+      }
+    },
+    "macOS": {
+      "dmg": {
+        "appPosition": {
+          "y": 170,
+          "x": 180
+        },
+        "windowSize": {
+          "height": 400,
+          "width": 660
+        },
+        "applicationFolderPosition": {
+          "y": 170,
+          "x": 480
+        }
       }
     }
   },

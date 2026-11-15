@@ -225,3 +225,11 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px v
   .catalog-grid { grid-template-columns: 1fr 1fr; }
   main { padding-inline: 30px; }
 }
+
+.catalog-toolbar { flex-wrap: wrap; }
+.catalog-toolbar input { flex: 1 1 220px; min-width: 160px; }
+.catalog-summary { color: var(--muted); font-size: 12px; margin: 0 0 16px; }
+.catalog-empty { grid-column: 1 / -1; }
+.license-consent { display: flex; gap: 10px; align-items: start; margin: 0 0 20px; font-size: 12px; line-height: 1.6; }
+.license-consent input { width: auto; min-height: auto; margin-top: 3px; }
+button:disabled { cursor: not-allowed; opacity: .5; }

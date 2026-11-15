@@ -31,6 +31,12 @@ pub(super) async fn dashboard(
         statuses,
         activities,
         schedule_enabled: saved_schedule_state(&state.state).map_err(|e| e.to_string())?,
+        update_channel: state
+            .state
+            .get_setting::<String>("update-channel")
+            .map_err(|e| e.to_string())?
+            .filter(|channel| matches!(channel.as_str(), "stable" | "beta"))
+            .unwrap_or_else(|| "stable".into()),
     })
 }
 
@@ -233,16 +239,28 @@ pub(super) async fn set_manual_version(
 }
 
 #[tauri::command]
+pub(super) async fn set_update_channel(
+    channel: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<(), String> {
+    update_endpoint(&channel)?;
+    state
+        .state
+        .set_setting("update-channel", &channel)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub(super) async fn check_app_update(
     channel: String,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> std::result::Result<AppUpdate, String> {
+    let endpoint = update_endpoint(&channel)?;
     state
         .state
         .set_setting("update-channel", &channel)
         .map_err(|error| error.to_string())?;
-    let endpoint = update_endpoint(&channel)?;
     let updater = app
         .updater_builder()
         .endpoints(vec![endpoint])

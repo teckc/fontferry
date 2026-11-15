@@ -54,6 +54,7 @@ struct Dashboard {
     statuses: Vec<UpdateStatus>,
     activities: Vec<fontferry_core::Activity>,
     schedule_enabled: Option<bool>,
+    update_channel: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -118,6 +119,7 @@ fn run_gui() -> Result<()> {
             commands::save_source,
             commands::set_schedule,
             commands::set_manual_version,
+            commands::set_update_channel,
             commands::check_app_update,
             commands::install_app_update,
             commands::refresh_catalog
