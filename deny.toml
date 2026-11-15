@@ -1,5 +1,8 @@
 [advisories]
 ignore = [
+  { id = "RUSTSEC-2026-0370", reason = "Tauri opener/single-instance retain zbus5; unmaintained only; expires 2026-12-15; scripts/maintenance-exceptions.mjs enforces scope/date/type" },
+  { id = "RUSTSEC-2026-0371", reason = "Tauri opener/single-instance retain zbus5; unmaintained only; expires 2026-12-15; scripts/maintenance-exceptions.mjs enforces scope/date/type" },
+  { id = "RUSTSEC-2026-0372", reason = "Tauri opener/single-instance retain zbus5; unmaintained only; expires 2026-12-15; scripts/maintenance-exceptions.mjs enforces scope/date/type" },
   # Tauri 2 Linux currently depends on GTK3 bindings. These advisories are
   # unmaintained notices, not known vulnerabilities; remove when Tauri moves.
   "RUSTSEC-2024-0370",
