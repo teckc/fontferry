@@ -21,7 +21,7 @@ impl SqliteState {
             .try_exists()
             .map_err(|error| FontFerryError::State(error.to_string()))?;
         // A missing ledger is not an empty committed ledger. Never create one
-        // beside recovery evidence: uninstall recovery treats a missing row as committed.
+        // beside recovery evidence. Missing ownership is never proof of a commit.
         let flags = if pending {
             OpenFlags::SQLITE_OPEN_READ_WRITE
         } else {
@@ -66,6 +66,12 @@ impl SqliteState {
                 r#"
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                   version INTEGER PRIMARY KEY
+                );
+                CREATE TABLE IF NOT EXISTS operation_receipts (
+                  operation_id TEXT PRIMARY KEY,
+                  journal_digest TEXT NOT NULL,
+                  font_id TEXT NOT NULL,
+                  after_json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS installed_fonts (
                   font_id TEXT PRIMARY KEY,
@@ -256,6 +262,77 @@ impl SqliteState {
 
 #[async_trait]
 impl StateRepository for SqliteState {
+    async fn commit_operation(
+        &self,
+        operation_id: &str,
+        journal_digest: &str,
+        font_id: &str,
+        before: Option<&InstalledFont>,
+        after: Option<&InstalledFont>,
+    ) -> Result<()> {
+        let error = |e: rusqlite::Error| FontFerryError::State(e.to_string());
+        if operation_id.is_empty()
+            || after.is_some_and(|r| r.font_id != font_id)
+            || before.is_some_and(|r| r.font_id != font_id)
+        {
+            return Err(FontFerryError::State(
+                "invalid operation receipt identity".into(),
+            ));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(error)?;
+        let current: Option<String> = transaction
+            .query_row(
+                "SELECT record_json FROM installed_fonts WHERE font_id = ?1",
+                [font_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(error)?;
+        let current: Option<InstalledFont> = current
+            .map(|s| serde_json::from_str(&s))
+            .transpose()
+            .map_err(|e| FontFerryError::State(e.to_string()))?;
+        if current.as_ref() != before {
+            return Err(FontFerryError::State(
+                "ownership changed before commit; preserve recovery data".into(),
+            ));
+        }
+        let after_json =
+            serde_json::to_string(&after).map_err(|e| FontFerryError::State(e.to_string()))?;
+        match after {
+            Some(_) => {
+                transaction.execute("INSERT INTO installed_fonts(font_id, record_json) VALUES (?1, ?2) ON CONFLICT(font_id) DO UPDATE SET record_json=excluded.record_json", params![font_id, after_json]).map_err(error)?;
+            }
+            None => {
+                transaction
+                    .execute("DELETE FROM installed_fonts WHERE font_id = ?1", [font_id])
+                    .map_err(error)?;
+            }
+        }
+        transaction.execute("INSERT INTO operation_receipts(operation_id, journal_digest, font_id, after_json) VALUES (?1, ?2, ?3, ?4)", params![operation_id, journal_digest, font_id, after_json]).map_err(error)?;
+        transaction.commit().map_err(error)
+    }
+
+    async fn has_operation_receipt(
+        &self,
+        operation_id: &str,
+        journal_digest: &str,
+        font_id: &str,
+        after: Option<&InstalledFont>,
+    ) -> Result<bool> {
+        let connection = self.lock()?;
+        let row: Option<(String, String, String)> = connection.query_row("SELECT journal_digest, font_id, after_json FROM operation_receipts WHERE operation_id = ?1", [operation_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional().map_err(|e| FontFerryError::State(e.to_string()))?;
+        let Some((digest, id, json)) = row else {
+            return Ok(false);
+        };
+        let recorded: Option<InstalledFont> =
+            serde_json::from_str(&json).map_err(|e| FontFerryError::State(e.to_string()))?;
+        Ok(digest == journal_digest && id == font_id && recorded.as_ref() == after)
+    }
+
     async fn list_installed(&self) -> Result<Vec<InstalledFont>> {
         let connection = self.lock()?;
         let mut statement = connection
@@ -391,6 +468,42 @@ mod recovery_open_tests {
             |row| row.get(0),
         )?;
         assert_eq!(count, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_database_without_pending_journal_migrates_without_losing_ownership()
+    -> TestResult {
+        let root = tempfile::tempdir()?;
+        let database = root.path().join("fontferry.db");
+        let connection = Connection::open(&database)?;
+        connection.execute_batch(
+            "CREATE TABLE installed_fonts (font_id TEXT PRIMARY KEY, record_json TEXT NOT NULL);",
+        )?;
+        let installed = InstalledFont {
+            font_id: "legacy-font".into(),
+            version: "1".into(),
+            variant_ids: vec![],
+            installed_at: time::OffsetDateTime::UNIX_EPOCH,
+            owned_files: vec![],
+            previous: None,
+            manual_version: None,
+        };
+        connection.execute(
+            "INSERT INTO installed_fonts VALUES (?1, ?2)",
+            params![installed.font_id, serde_json::to_string(&installed)?],
+        )?;
+        drop(connection);
+        let state = SqliteState::open(&database)?;
+        assert_eq!(
+            state.get_installed(&installed.font_id).await?,
+            Some(installed)
+        );
+        assert!(
+            !state
+                .has_operation_receipt("absent", "digest", "legacy-font", None)
+                .await?
+        );
         Ok(())
     }
 

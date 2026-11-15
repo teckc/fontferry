@@ -101,6 +101,20 @@ pub trait FontInstaller: Send + Sync {
         self.recover(state).await
     }
 
+    /// Commit the ownership change. Durable installers override this to bind
+    /// the database transaction to their journal before cleanup is permitted.
+    async fn commit(
+        &self,
+        state: &dyn StateRepository,
+        font_id: &str,
+        installed: Option<&InstalledFont>,
+    ) -> Result<()> {
+        match installed {
+            Some(installed) => state.save_installed(installed).await,
+            None => state.remove_installed(font_id).await,
+        }
+    }
+
     async fn install(
         &self,
         font: &FontDefinition,
@@ -121,6 +135,31 @@ pub trait FontInstaller: Send + Sync {
 
 #[async_trait]
 pub trait StateRepository: Send + Sync {
+    /// Atomically change ownership and record the exact journal that committed.
+    /// Repositories without durable receipts must not silently fall back to save.
+    async fn commit_operation(
+        &self,
+        _operation_id: &str,
+        _journal_digest: &str,
+        _font_id: &str,
+        _before: Option<&InstalledFont>,
+        _after: Option<&InstalledFont>,
+    ) -> Result<()> {
+        Err(crate::FontFerryError::State(
+            "durable operation receipts are unsupported".into(),
+        ))
+    }
+
+    async fn has_operation_receipt(
+        &self,
+        _operation_id: &str,
+        _journal_digest: &str,
+        _font_id: &str,
+        _after: Option<&InstalledFont>,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
     async fn list_installed(&self) -> Result<Vec<InstalledFont>>;
     async fn get_installed(&self, font_id: &str) -> Result<Option<InstalledFont>>;
     async fn save_installed(&self, installed: &InstalledFont) -> Result<()>;

@@ -53,12 +53,34 @@ impl FontSystem for NativeFontSystem {
 /// Written before touching installed files; retained until all cleanup succeeds.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Operation {
+    #[serde(default)]
+    operation_id: Option<String>,
     font_id: String,
     version: Option<String>,
     old: Option<InstalledFont>,
     backup: Option<RollbackSnapshot>,
     old_hashes: BTreeMap<PathBuf, String>,
     target: BTreeMap<PathBuf, String>,
+}
+
+impl Operation {
+    fn matches_target(&self, installed: Option<&InstalledFont>) -> bool {
+        match (&self.version, installed) {
+            (None, None) => true,
+            (Some(version), Some(installed)) => {
+                installed.font_id == self.font_id
+                    && installed.version == *version
+                    && installed
+                        .owned_files
+                        .iter()
+                        .cloned()
+                        .collect::<BTreeSet<_>>()
+                        == self.target.keys().cloned().collect()
+                    && installed.previous == self.backup
+            }
+            _ => false,
+        }
+    }
 }
 
 impl PlatformFontInstaller {
@@ -116,7 +138,8 @@ impl PlatformFontInstaller {
     ) -> Result<InstallOutcome> {
         if self.journal().exists() {
             return Err(FontFerryError::State(
-                "unfinished font operation; restart to recover before retrying".into(),
+                "unfinished font operation; preserve recovery data and resolve it before retrying"
+                    .into(),
             ));
         }
         let directory = self.system.directory()?;
@@ -167,6 +190,7 @@ impl PlatformFontInstaller {
             None => (None, BTreeMap::new()),
         };
         let operation = Operation {
+            operation_id: Some(Uuid::new_v4().to_string()),
             font_id: font.id.clone(),
             version: version.map(str::to_owned),
             old: old.cloned(),
@@ -301,65 +325,25 @@ impl PlatformFontInstaller {
         Ok(())
     }
 
-    fn resolve(&self, operation: &Operation, committed: bool) -> Result<()> {
+    fn resolve_committed(&self, operation: &Operation) -> Result<()> {
         self.validate_operation(operation)?;
         let old: BTreeSet<_> = operation.old_hashes.keys().cloned().collect();
         let target: BTreeSet<_> = operation.target.keys().cloned().collect();
-        let (keep, remove) = if committed {
-            (&target, &old)
-        } else {
-            (&old, &target)
-        };
-        let obsolete: Vec<_> = remove.difference(keep).cloned().collect();
-        let obsolete_hashes = if committed {
-            &operation.old_hashes
-        } else {
-            &operation.target
-        };
-        // Preflight the entire plan before copies, registration, or deletion. A partial
-        // copy has no verified final hash: keep it and the journal for manual recovery.
+        let obsolete: Vec<_> = old.difference(&target).cloned().collect();
+        // Preflight the entire plan before any registration or deletion.
         for path in &obsolete {
-            verify_existing(path, &obsolete_hashes[path])?;
+            verify_existing(path, &operation.old_hashes[path])?;
         }
-        let mut copies = Vec::new();
-        if committed {
-            for (path, hash) in &operation.target {
-                if !verify_existing(path, hash)? {
-                    return Err(FontFerryError::State(
-                        "committed font is missing; preserve journal and backups for repair".into(),
-                    ));
-                }
+        for (path, hash) in &operation.target {
+            if !verify_existing(path, hash)? {
+                return Err(FontFerryError::State(
+                    "committed font is missing; preserve journal and backups for repair".into(),
+                ));
             }
-        } else if let Some(snapshot) = &operation.backup {
-            for (path, hash) in &operation.old_hashes {
-                if verify_existing(path, hash)? {
-                    continue;
-                }
-                let source =
-                    snapshot
-                        .backup_directory
-                        .join(path.file_name().ok_or_else(|| {
-                            FontFerryError::State("invalid recovery path".into())
-                        })?);
-                if !verify_existing(&source, hash)? {
-                    return Err(FontFerryError::State(
-                        "recovery backup is missing; preserve journal and current files".into(),
-                    ));
-                }
-                copies.push((source, path));
-            }
-        }
-        for (source, path) in copies {
-            copy_new(&source, path)?;
-        }
-        if !committed && operation.backup.is_some() {
-            self.system
-                .register(&old.difference(&target).cloned().collect::<Vec<_>>())?;
         }
         self.system.unregister(&obsolete)?;
         for path in &obsolete {
-            // Recheck immediately before deletion as well as during the whole-plan preflight.
-            if !verify_existing(path, &obsolete_hashes[path])? {
+            if !verify_existing(path, &operation.old_hashes[path])? {
                 continue;
             }
             match self.system.remove(path) {
@@ -369,17 +353,12 @@ impl PlatformFontInstaller {
             }
         }
         self.system.refresh()?;
-        // Keep the newly created snapshot after an install. Previous history is obsolete only now.
-        if committed {
-            if let Some(previous) = operation.old.as_ref().and_then(|old| old.previous.as_ref()) {
-                remove_directory(&previous.backup_directory)?;
-            }
-            if operation.version.is_none()
-                && let Some(backup) = &operation.backup
-            {
-                remove_directory(&backup.backup_directory)?;
-            }
-        } else if let Some(backup) = &operation.backup {
+        if let Some(previous) = operation.old.as_ref().and_then(|old| old.previous.as_ref()) {
+            remove_directory(&previous.backup_directory)?;
+        }
+        if operation.version.is_none()
+            && let Some(backup) = &operation.backup
+        {
             remove_directory(&backup.backup_directory)?;
         }
         fs::remove_file(self.journal()).map_err(platform_error)
@@ -400,29 +379,62 @@ impl FontInstaller for PlatformFontInstaller {
             ))
         })?;
         let installed = state.get_installed(&operation.font_id).await?;
-        let committed = match (&operation.version, &installed) {
-            (None, None) => true,
-            (Some(version), Some(installed)) => {
-                installed.version == *version
-                    && installed
-                        .owned_files
-                        .iter()
-                        .cloned()
-                        .collect::<BTreeSet<_>>()
-                        == operation.target.keys().cloned().collect()
-                    && installed.previous == operation.backup
-            }
-            _ => false,
-        };
-        if !committed && installed != operation.old {
+        self.validate_operation(&operation)?;
+        let operation_id = operation.operation_id.as_deref().ok_or_else(|| {
+            FontFerryError::State("legacy recovery journal has no commit receipt; preserve journal, backups and fonts for repair".into())
+        })?;
+        if !state
+            .has_operation_receipt(
+                operation_id,
+                &hex::encode(Sha256::digest(&bytes)),
+                &operation.font_id,
+                installed.as_ref(),
+            )
+            .await?
+        {
             return Err(FontFerryError::State(
-                "database does not match either journal state; manual recovery required".into(),
+                "no matching committed operation receipt; preserve journal, backups and fonts for repair; restarting alone cannot establish whether this operation committed".into(),
+            ));
+        }
+        if !operation.matches_target(installed.as_ref()) {
+            return Err(FontFerryError::State(
+                "committed ownership does not match recovery journal; preserve all recovery data"
+                    .into(),
             ));
         }
         let this = self.clone();
-        tokio::task::spawn_blocking(move || this.resolve(&operation, committed))
+        tokio::task::spawn_blocking(move || this.resolve_committed(&operation))
             .await
             .map_err(|e| FontFerryError::State(e.to_string()))?
+    }
+
+    async fn commit(
+        &self,
+        state: &dyn StateRepository,
+        font_id: &str,
+        installed: Option<&InstalledFont>,
+    ) -> Result<()> {
+        let bytes = fs::read(self.journal()).map_err(platform_error)?;
+        let operation: Operation =
+            serde_json::from_slice(&bytes).map_err(|e| FontFerryError::State(e.to_string()))?;
+        self.validate_operation(&operation)?;
+        if operation.font_id != font_id || !operation.matches_target(installed) {
+            return Err(FontFerryError::State(
+                "ownership commit does not match the pending journal".into(),
+            ));
+        }
+        let operation_id = operation.operation_id.as_deref().ok_or_else(|| {
+            FontFerryError::State("legacy journal cannot be committed automatically".into())
+        })?;
+        state
+            .commit_operation(
+                operation_id,
+                &hex::encode(Sha256::digest(&bytes)),
+                font_id,
+                operation.old.as_ref(),
+                installed,
+            )
+            .await
     }
 
     async fn install(
@@ -462,6 +474,7 @@ impl FontInstaller for PlatformFontInstaller {
             }
             let (backup, old_hashes) = this.backup(&installed)?;
             let operation = Operation {
+                operation_id: Some(Uuid::new_v4().to_string()),
                 font_id: installed.font_id.clone(),
                 version: None,
                 old: Some(installed.clone()),
@@ -1008,6 +1021,184 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn receipt_insert_failure_rolls_back_ownership_change() -> TestResult {
+        for uninstall in [false, true] {
+            let root = tempfile::tempdir()?;
+            let (installer, _, state) = setup(root.path())?;
+            let font = definition()?;
+            let a = prepared(root.path(), "a.ttf", b"a")?;
+            let first = record(&font, "1", installer.install(&font, "1", &[a], None).await?);
+            installer.commit(&state, &font.id, Some(&first)).await?;
+            installer.finish(&state).await?;
+            let after = if uninstall {
+                installer.uninstall(&first).await?;
+                None
+            } else {
+                let b = prepared(root.path(), "b.ttf", b"b")?;
+                Some(record(
+                    &font,
+                    "2",
+                    installer.install(&font, "2", &[b], Some(&first)).await?,
+                ))
+            };
+            let connection = rusqlite::Connection::open(installer.paths.database())?;
+            connection.execute_batch("CREATE TRIGGER fail_receipt BEFORE INSERT ON operation_receipts BEGIN SELECT RAISE(FAIL, 'injected receipt failure'); END;")?;
+            assert!(
+                installer
+                    .commit(&state, &font.id, after.as_ref())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(state.get_installed(&font.id).await?, Some(first.clone()));
+            let count: i64 =
+                connection
+                    .query_row("SELECT COUNT(*) FROM operation_receipts", [], |r| r.get(0))?;
+            assert_eq!(count, 1);
+            assert!(installer.recover(&state).await.is_err());
+            assert!(first.owned_files.iter().all(|p| p.exists()));
+            if let Some(after) = after {
+                assert!(after.owned_files.iter().all(|p| p.exists()));
+            }
+            assert!(installer.journal().exists());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn committed_cleanup_checks_every_obsolete_file_before_deletion() -> TestResult {
+        let root = tempfile::tempdir()?;
+        let (installer, system, state) = setup(root.path())?;
+        let font = definition()?;
+        let a = prepared(root.path(), "a.ttf", b"a")?;
+        let b = prepared(root.path(), "b.ttf", b"b")?;
+        let first = record(
+            &font,
+            "1",
+            installer.install(&font, "1", &[a, b], None).await?,
+        );
+        installer.commit(&state, &font.id, Some(&first)).await?;
+        installer.finish(&state).await?;
+        installer.uninstall(&first).await?;
+        installer.commit(&state, &font.id, None).await?;
+        let mut paths = first.owned_files.clone();
+        paths.sort();
+        fs::write(&paths[1], b"external replacement")?;
+        let before = system.registered.lock().map_err(|e| e.to_string())?.clone();
+        assert!(installer.recover(&state).await.is_err());
+        assert!(paths[0].is_file());
+        assert_eq!(fs::read(&paths[1])?, b"external replacement");
+        assert_eq!(
+            *system.registered.lock().map_err(|e| e.to_string())?,
+            before
+        );
+        assert!(installer.journal().exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_receipt_never_turns_an_empty_ledger_into_uninstall_commit() -> TestResult {
+        for replace_database in [false, true] {
+            let root = tempfile::tempdir()?;
+            let (installer, system, state) = setup(root.path())?;
+            let font = definition()?;
+            let a = prepared(root.path(), "a.ttf", b"a")?;
+            let installed = record(&font, "1", installer.install(&font, "1", &[a], None).await?);
+            installer.commit(&state, &font.id, Some(&installed)).await?;
+            installer.finish(&state).await?;
+            installer.uninstall(&installed).await?;
+            let journal_before = fs::read(installer.journal())?;
+            let registered_before = system.registered.lock().map_err(|e| e.to_string())?.clone();
+            if replace_database {
+                let replacement = SqliteState::open(&root.path().join("unrelated.db"))?;
+                assert!(installer.recover(&replacement).await.is_err());
+            } else {
+                // A readable, structurally valid but cleared ownership ledger.
+                let connection = rusqlite::Connection::open(installer.paths.database())?;
+                connection.execute("DELETE FROM installed_fonts", [])?;
+                assert!(installer.recover(&state).await.is_err());
+            }
+            assert_eq!(fs::read(installer.journal())?, journal_before);
+            assert!(installed.owned_files.iter().all(|p| p.exists()));
+            assert_eq!(
+                *system.registered.lock().map_err(|e| e.to_string())?,
+                registered_before
+            );
+            let operation: Operation = serde_json::from_slice(&journal_before)?;
+            assert!(
+                operation
+                    .backup
+                    .ok_or("missing backup")?
+                    .backup_directory
+                    .exists()
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn old_database_snapshot_cannot_undo_a_committed_install_or_finish_uninstall()
+    -> TestResult {
+        for uninstall in [false, true] {
+            let root = tempfile::tempdir()?;
+            let (installer, system, state) = setup(root.path())?;
+            let snapshot = root.path().join("old.db");
+            let connection = rusqlite::Connection::open(installer.paths.database())?;
+            connection.execute("VACUUM INTO ?1", [snapshot.to_string_lossy().as_ref()])?;
+            drop(connection);
+            let font = definition()?;
+            let a = prepared(root.path(), "a.ttf", b"a")?;
+            let installed = record(&font, "1", installer.install(&font, "1", &[a], None).await?);
+            installer.commit(&state, &font.id, Some(&installed)).await?;
+            if uninstall {
+                installer.finish(&state).await?;
+                installer.uninstall(&installed).await?;
+                installer.commit(&state, &font.id, None).await?;
+            }
+            let journal_before = fs::read(installer.journal())?;
+            let registered_before = system.registered.lock().map_err(|e| e.to_string())?.clone();
+            drop(state);
+            fs::copy(&snapshot, installer.paths.database())?;
+            let restored = SqliteState::open(&installer.paths.database())?;
+            assert!(installer.recover(&restored).await.is_err());
+            assert_eq!(fs::read(installer.journal())?, journal_before);
+            assert!(installed.owned_files.iter().all(|p| p.exists()));
+            assert_eq!(
+                *system.registered.lock().map_err(|e| e.to_string())?,
+                registered_before
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_journal_and_modified_committed_journal_are_preserved() -> TestResult {
+        for legacy in [false, true] {
+            let root = tempfile::tempdir()?;
+            let (installer, _, state) = setup(root.path())?;
+            let font = definition()?;
+            let a = prepared(root.path(), "a.ttf", b"a")?;
+            let installed = record(&font, "1", installer.install(&font, "1", &[a], None).await?);
+            installer.commit(&state, &font.id, Some(&installed)).await?;
+            let mut journal: serde_json::Value =
+                serde_json::from_slice(&fs::read(installer.journal())?)?;
+            if legacy {
+                journal
+                    .as_object_mut()
+                    .ok_or("not object")?
+                    .remove("operation_id");
+            } else {
+                journal["operation_id"] = serde_json::Value::String(Uuid::new_v4().to_string());
+            }
+            let bytes = serde_json::to_vec(&journal)?;
+            fs::write(installer.journal(), &bytes)?;
+            assert!(installer.recover(&state).await.is_err());
+            assert_eq!(fs::read(installer.journal())?, bytes);
+            assert!(installed.owned_files.iter().all(|p| p.exists()));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn repeated_install_and_partial_upgrade_preserve_shared_files() -> TestResult {
         let root = tempfile::tempdir()?;
         let (installer, system, state) = setup(root.path())?;
@@ -1022,7 +1213,9 @@ mod tests {
                 .await?,
         );
         assert_eq!(first.owned_files.len(), 1);
-        state.save_installed(&first).await?;
+        installer
+            .commit(&state, &first.font_id, Some(&first))
+            .await?;
         installer.finish(&state).await?;
         let repeated = record(
             &font,
@@ -1031,7 +1224,9 @@ mod tests {
                 .install(&font, "1.0", std::slice::from_ref(&a), Some(&first))
                 .await?,
         );
-        state.save_installed(&repeated).await?;
+        installer
+            .commit(&state, &repeated.font_id, Some(&repeated))
+            .await?;
         installer.finish(&state).await?;
         assert_eq!(first.owned_files, repeated.owned_files);
         let second = record(
@@ -1041,7 +1236,9 @@ mod tests {
                 .install(&font, "2.0", &[a, b], Some(&repeated))
                 .await?,
         );
-        state.save_installed(&second).await?;
+        installer
+            .commit(&state, &second.font_id, Some(&second))
+            .await?;
         installer.finish(&state).await?;
         assert!(second.owned_files.iter().all(|p| p.is_file()));
         assert_eq!(
@@ -1058,13 +1255,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn uncommitted_registration_failure_recovers_files_and_sqlite() -> TestResult {
+    async fn uncommitted_registration_failure_preserves_files_and_sqlite() -> TestResult {
         let root = tempfile::tempdir()?;
         let (installer, system, state) = setup(root.path())?;
         let font = definition()?;
         let a = prepared(root.path(), "a.ttf", b"a")?;
         let first = record(&font, "1", installer.install(&font, "1", &[a], None).await?);
-        state.save_installed(&first).await?;
+        installer
+            .commit(&state, &first.font_id, Some(&first))
+            .await?;
         installer.finish(&state).await?;
         let b = prepared(root.path(), "b.ttf", b"b")?;
         system.fail_register.store(true, Ordering::SeqCst);
@@ -1080,23 +1279,24 @@ mod tests {
             paths: installer.paths.clone(),
             system: system.clone(),
         };
-        restarted.recover(&state).await?;
+        assert!(restarted.recover(&state).await.is_err());
         assert_eq!(state.get_installed(&font.id).await?, Some(first.clone()));
         assert!(first.owned_files.iter().all(|p| p.exists()));
-        assert_eq!(fs::read_dir(&system.root)?.count(), 1);
-        assert!(!restarted.journal().exists());
+        assert_eq!(fs::read_dir(&system.root)?.count(), 2);
+        assert!(restarted.journal().exists());
         Ok(())
     }
 
     #[tokio::test]
-    async fn database_failure_and_committed_restart_select_opposite_recovery_directions()
-    -> TestResult {
+    async fn database_failure_has_no_receipt_and_committed_restart_can_finish() -> TestResult {
         let root = tempfile::tempdir()?;
         let (installer, system, state) = setup(root.path())?;
         let font = definition()?;
         let a = prepared(root.path(), "a.ttf", b"a")?;
         let first = record(&font, "1", installer.install(&font, "1", &[a], None).await?);
-        state.save_installed(&first).await?;
+        installer
+            .commit(&state, &first.font_id, Some(&first))
+            .await?;
         installer.finish(&state).await?;
         let b = prepared(root.path(), "b.ttf", b"b")?;
         let uncommitted = record(
@@ -1109,17 +1309,23 @@ mod tests {
         // Trigger a real SQLite write failure, without altering the existing record.
         let connection = rusqlite::Connection::open(installer.paths.database())?;
         connection.execute_batch("CREATE TRIGGER fail_update BEFORE UPDATE ON installed_fonts BEGIN SELECT RAISE(FAIL, 'injected commit failure'); END;")?;
-        assert!(state.save_installed(&uncommitted).await.is_err());
-        installer.recover(&state).await?;
-        assert!(first.owned_files.iter().all(|p| p.exists()));
-        assert!(uncommitted.owned_files.iter().all(|p| !p.exists()));
-        connection.execute_batch("DROP TRIGGER fail_update;")?;
-        let committed = record(
-            &font,
-            "2",
-            installer.install(&font, "2", &[b], Some(&first)).await?,
+        assert!(
+            installer
+                .commit(&state, &uncommitted.font_id, Some(&uncommitted))
+                .await
+                .is_err()
         );
-        state.save_installed(&committed).await?;
+        assert!(installer.recover(&state).await.is_err());
+        assert!(first.owned_files.iter().all(|p| p.exists()));
+        assert!(uncommitted.owned_files.iter().all(|p| p.exists()));
+        let count: i64 =
+            connection.query_row("SELECT COUNT(*) FROM operation_receipts", [], |r| r.get(0))?;
+        assert_eq!(count, 1); // Only the earlier successful install committed.
+        connection.execute_batch("DROP TRIGGER fail_update;")?;
+        let committed = uncommitted;
+        installer
+            .commit(&state, &committed.font_id, Some(&committed))
+            .await?;
         assert!(first.owned_files.iter().all(|p| p.exists()));
         installer.recover(&state).await?;
         assert!(first.owned_files.iter().all(|p| !p.exists()));
@@ -1156,10 +1362,12 @@ mod tests {
         let font = definition()?;
         let a = prepared(root.path(), "a.ttf", b"a")?;
         let installed = record(&font, "1", installer.install(&font, "1", &[a], None).await?);
-        state.save_installed(&installed).await?;
+        installer
+            .commit(&state, &installed.font_id, Some(&installed))
+            .await?;
         installer.finish(&state).await?;
         installer.uninstall(&installed).await?;
-        state.remove_installed(&font.id).await?;
+        installer.commit(&state, &font.id, None).await?;
         system.fail_remove.store(true, Ordering::SeqCst);
         assert!(installer.finish(&state).await.is_err());
         assert!(installer.journal().exists());
@@ -1171,14 +1379,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unregister_and_refresh_failures_restore_old_registration() -> TestResult {
+    async fn unregister_and_refresh_failures_preserve_all_recovery_evidence() -> TestResult {
         for fail_unregister in [true, false] {
             let root = tempfile::tempdir()?;
             let (installer, system, state) = setup(root.path())?;
             let font = definition()?;
             let a = prepared(root.path(), "a.ttf", b"a")?;
             let first = record(&font, "1", installer.install(&font, "1", &[a], None).await?);
-            state.save_installed(&first).await?;
+            installer
+                .commit(&state, &first.font_id, Some(&first))
+                .await?;
             installer.finish(&state).await?;
             let b = prepared(root.path(), "b.ttf", b"b")?;
             if fail_unregister {
@@ -1192,11 +1402,14 @@ mod tests {
                     .await
                     .is_err()
             );
-            installer.recover(&state).await?;
+            let before = system.registered.lock().map_err(|e| e.to_string())?.clone();
+            assert!(installer.recover(&state).await.is_err());
             assert_eq!(
                 *system.registered.lock().map_err(|e| e.to_string())?,
-                first.owned_files.iter().cloned().collect()
+                before
             );
+            assert!(installer.journal().exists());
+            assert_eq!(fs::read_dir(&system.root)?.count(), 2);
             assert!(first.owned_files.iter().all(|p| p.exists()));
         }
         Ok(())
@@ -1228,7 +1441,9 @@ mod tests {
             let font = definition()?;
             let a = prepared(root.path(), "a.ttf", b"a")?;
             let first = record(&font, "1", installer.install(&font, "1", &[a], None).await?);
-            state.save_installed(&first).await?;
+            installer
+                .commit(&state, &first.font_id, Some(&first))
+                .await?;
             installer.finish(&state).await?;
             let b = prepared(root.path(), "b.ttf", b"b")?;
             let next = record(
@@ -1237,7 +1452,7 @@ mod tests {
                 installer.install(&font, "2", &[b], Some(&first)).await?,
             );
             if committed {
-                state.save_installed(&next).await?;
+                installer.commit(&state, &next.font_id, Some(&next)).await?;
             }
             let obsolete = if committed {
                 &first.owned_files[0]
@@ -1258,7 +1473,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recovery_preflights_all_sources_and_destination_conflicts() -> TestResult {
+    async fn uncommitted_recovery_preserves_missing_and_conflicting_files() -> TestResult {
         for conflict in [false, true] {
             let root = tempfile::tempdir()?;
             let (installer, system, state) = setup(root.path())?;
@@ -1270,7 +1485,9 @@ mod tests {
                 "1",
                 installer.install(&font, "1", &[a, b], None).await?,
             );
-            state.save_installed(&first).await?;
+            installer
+                .commit(&state, &first.font_id, Some(&first))
+                .await?;
             installer.finish(&state).await?;
             installer.uninstall(&first).await?;
             let operation: Operation = serde_json::from_slice(&fs::read(installer.journal())?)?;
@@ -1322,7 +1539,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn recovery_refuses_dangling_symlink_before_restoring_any_file() -> TestResult {
+    async fn committed_cleanup_refuses_dangling_symlink() -> TestResult {
         let root = tempfile::tempdir()?;
         let (installer, _, state) = setup(root.path())?;
         let font = definition()?;
@@ -1333,9 +1550,12 @@ mod tests {
             "1",
             installer.install(&font, "1", &[a, b], None).await?,
         );
-        state.save_installed(&first).await?;
+        installer
+            .commit(&state, &first.font_id, Some(&first))
+            .await?;
         installer.finish(&state).await?;
         installer.uninstall(&first).await?;
+        installer.commit(&state, &font.id, None).await?;
         for path in &first.owned_files {
             fs::remove_file(path)?;
         }
@@ -1357,7 +1577,9 @@ mod tests {
         let font = definition()?;
         let a = prepared(root.path(), "a.ttf", b"a")?;
         let first = record(&font, "1", installer.install(&font, "1", &[a], None).await?);
-        state.save_installed(&first).await?;
+        installer
+            .commit(&state, &first.font_id, Some(&first))
+            .await?;
         installer.finish(&state).await?;
         let missing = RollbackSnapshot {
             version: "0".into(),

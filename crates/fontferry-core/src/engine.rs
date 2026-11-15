@@ -172,7 +172,7 @@ impl FontEngine {
                 let message = match self.installer.recover(self.state.as_ref()).await {
                     Ok(()) => error.to_string(),
                     Err(recovery) => format!(
-                        "{error}; recovery incomplete: {recovery}; retain journal and backups, then restart"
+                        "{error}; recovery incomplete: {recovery}; preserve journal, backups and fonts for repair; restarting alone may not resolve this"
                     ),
                 };
                 self.report_activity(Some(font_id.clone()), ActivityLevel::Error, message.clone())
@@ -270,7 +270,9 @@ impl FontEngine {
             previous: outcome.previous_snapshot,
             manual_version: None,
         };
-        self.state.save_installed(&installed).await?;
+        self.installer
+            .commit(self.state.as_ref(), &installed.font_id, Some(&installed))
+            .await?;
         self.installer.finish(self.state.as_ref()).await?;
         self.report_activity(
             Some(font.id),
@@ -357,7 +359,7 @@ impl FontEngine {
                 let message = match self.installer.recover(self.state.as_ref()).await {
                     Ok(()) => error.to_string(),
                     Err(recovery) => format!(
-                        "{error}; recovery incomplete: {recovery}; retain journal and backups, then restart"
+                        "{error}; recovery incomplete: {recovery}; preserve journal, backups and fonts for repair; restarting alone may not resolve this"
                     ),
                 };
                 self.report_activity(
@@ -374,7 +376,9 @@ impl FontEngine {
     async fn uninstall_inner(&self, font_id: &str) -> Result<()> {
         if let Some(installed) = self.state.get_installed(font_id).await? {
             self.installer.uninstall(&installed).await?;
-            self.state.remove_installed(font_id).await?;
+            self.installer
+                .commit(self.state.as_ref(), font_id, None)
+                .await?;
             self.installer.finish(self.state.as_ref()).await?;
         }
         Ok(())
@@ -400,7 +404,7 @@ impl FontEngine {
                 let message = match self.installer.recover(self.state.as_ref()).await {
                     Ok(()) => error.to_string(),
                     Err(recovery) => format!(
-                        "{error}; recovery incomplete: {recovery}; retain journal and backups, then restart"
+                        "{error}; recovery incomplete: {recovery}; preserve journal, backups and fonts for repair; restarting alone may not resolve this"
                     ),
                 };
                 self.report_activity(
@@ -435,7 +439,9 @@ impl FontEngine {
             previous: outcome.previous_snapshot,
             manual_version: None,
         };
-        self.state.save_installed(&restored).await?;
+        self.installer
+            .commit(self.state.as_ref(), &restored.font_id, Some(&restored))
+            .await?;
         self.installer.finish(self.state.as_ref()).await?;
         Ok(restored)
     }
@@ -734,7 +740,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compensates_platform_install_when_state_commit_fails()
+    async fn calls_recovery_after_state_commit_failure()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
         let staging = tempfile::tempdir()?;
         let uninstall_count = Arc::new(AtomicUsize::new(0));
