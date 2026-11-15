@@ -34,8 +34,8 @@
 1. Acquire the process lock **before** reading installation facts used for a mutation. Busy operations return a retryable human-readable error; process exit releases the OS lock. Do not unlink `operations.lock` while any FontFerry process is running.
 2. Validate prepared bytes and ownership; create a uniquely named verified backup. Write and sync `font-operation.json` before installed-file mutations.
 3. Copy only new paths, register additions, unregister removals and refresh. Keep old files on disk. Shared paths are never unregistered or deleted by the transition.
-4. Commit the installed record in SQLite. SQLite is only the database commit authority, not a filesystem/system-API transaction.
-5. Recovery compares the database version, owned-file set and snapshot identity with the journal. A committed operation finishes cleanup; an uncommitted operation restores old files/registration and removes new files. Uninstall commits when the DB record is absent.
+4. Compare the journal’s prior ownership record and atomically commit the installed record and operation receipt in SQLite. SQLite is not a filesystem/system-API transaction.
+5. Recovery requires an exact journal-bound receipt and matching current ownership. Only a proven committed operation finishes cleanup. A missing record alone never proves an uninstall committed. An uncommitted or ambiguous operation preserves all recovery evidence and blocks further mutations, without automatic compensation.
 6. Cleanup errors return failure and retain the journal. The DB may already describe the new installation; the journal explains remaining old files. Restart retries recovery before another mutation. A malformed journal or unavailable recovery material blocks mutation with an actionable error; it is never silently discarded.
 7. Snapshots are removed only after state commit. A rollback creates a snapshot of the version being replaced, allowing a subsequent rollback in the opposite direction.
 
@@ -79,8 +79,8 @@ The follow-up merges main `05c54a7` (its dependency-update commits) into the PR 
 | Review concern | Implemented response |
 | --- | --- |
 | Special-use IPv4 | Reject all of 192.0.0.0/24 consistently for literal URLs, mapped IPv6 and the DNS-address predicate. This is a conservative application policy, including the .9/.10 anycast exceptions, not a claim that the entire range is RFC1918 space. See the [IANA registry](https://www.iana.org/assignments/iana-ipv4-special-registry/). Tests cover every address in the range. |
-| Replaced obsolete files | Preflight old/target journal hashes and file types before any recovery mutations; recheck before deleting. Replaced files and symlinks retain the journal and return an actionable error. Both commit and compensation directions are tested. |
-| Recovery preflight | The existing code already validated required backups in a separate pass. It now also validates all destinations and obsolete paths before copying. Tests cover a later corrupt backup, later conflicting destination and dangling symlink. |
+| Replaced obsolete files | Preflight old/target journal hashes and file types before any recovery mutations; recheck before deleting. Replaced files and symlinks retain the journal and return an actionable error. Committed cleanup is tested. Uncommitted operations now stop without automatic compensation; see the receipt policy below. |
+| Recovery preflight | Committed cleanup validates every target and obsolete file before any deletion. Tests cover a later replaced obsolete file and a dangling symlink without deleting earlier files. Uncommitted operations stop at the receipt check and preserve incomplete or conflicting recovery material. |
 | Invalid journals | Validate file-set/record consistency, shared-path hashes, install/uninstall shape, hash syntax, font-directory containment and snapshot paths before recovery mutation. Unknown database states block recovery. This is consistency validation, not authentication against a malicious local account. |
 | Activity failures | Diagnostic persistence cannot change successful install/uninstall/rollback results or replace the primary failure. Tracing reports activity-storage failures. A scheduled re-check failure records its font ID and reason. |
 | Cache message | The warning accurately says metadata is retained for provenance and online freshness is unconfirmed. Network failures still return errors. |
@@ -91,9 +91,9 @@ The follow-up merges main `05c54a7` (its dependency-update commits) into the PR 
 
 ### Conservative recovery of incomplete copies
 
-A failed direct copy can leave bytes that do not match the intended final hash. Such bytes cannot safely be distinguished from an externally replaced file after a crash. Recovery now **preserves the mismatching file and journal**, returns its path, and blocks further font mutation rather than deleting it by assumption. Complete matching additions can still be compensated automatically. This deliberately replaces the earlier test expectation that any partial destination is silently removed.
+A failed direct copy can leave bytes that do not match the intended final hash. Such bytes cannot safely be distinguished from an externally replaced file after a crash. Recovery now **preserves the mismatching file and journal**, returns its path, and blocks further font mutation rather than deleting it by assumption. Uncommitted additions are also retained: a matching file hash alone cannot prove that rolling back is safe. This deliberately replaces the earlier test expectation that any partial destination is silently removed.
 
-For manual recovery: close FontFerry/font-using applications, preserve the database, journal and backup directories, inspect the reported path and journal hashes, and move a confirmed conflicting/incomplete file to a separate quarantine location without discarding it. Retry recovery only once the affected paths and recovery material are understood. Do not delete the journal to bypass a failed integrity check. Hash preflight does not provide protection against an adversarial concurrent filesystem writer; the process lock only serializes FontFerry.
+For manual recovery: close FontFerry/font-using applications, preserve the database, journal and backup directories, inspect the reported path and journal hashes, and move a confirmed conflicting/incomplete file to a separate quarantine location without discarding it. Retry committed cleanup only once the affected paths and recovery material are understood. If the operation has no matching commit receipt, quarantining a file or restarting is not enough: a maintainer must reconcile the saved journal, ownership ledger, font files and OS registration before the operation can be resolved. There is not yet a one-click repair command. Do not delete the journal to bypass a failed integrity check. Hash preflight does not provide protection against an adversarial concurrent filesystem writer; the process lock only serializes FontFerry.
 
 ### Follow-up verification
 
@@ -105,3 +105,31 @@ For manual recovery: close FontFerry/font-using applications, preserve the datab
 - Updated remote CI evidence is recorded in the PR after pushing this follow-up; earlier successful runs are not evidence for these new changes.
 
 Scheduler intent records expose uncertainty rather than attempt an unsafe automatic task rollback. An explicit retry reapplies the selected target idempotently. External scheduler edits remain outside continuous reconciliation. Neither this change nor the font journal claims power-loss atomicity or native-platform acceptance from mock tests.
+
+
+## Commit-receipt recovery policy (2026-11-15)
+
+Automatic cleanup now requires a SQLite receipt containing the operation UUID,
+SHA-256 of the exact journal bytes, font ID and complete committed ownership record
+(or explicit JSON `null` for uninstall). The receipt and ownership update/delete
+are written in one SQLite transaction after comparing the prior ownership record.
+Recovery also verifies that the current ownership record matches the receipt and
+journal target, then preflights all files before deleting obsolete files.
+
+An empty, cleared, unrelated or older ledger is **not** evidence that an uninstall
+committed. Missing receipts, legacy pending journals and mismatches leave fonts,
+backups, registration and journal untouched by recovery. This deliberately removes
+automatic pre-commit compensation: registration, refresh or database errors may
+leave an unfinished operation that blocks later mutations. Restarting alone does
+not repair this state. Preserve the entire data directory (including SQLite WAL
+when present), journal, snapshots and font files; do not delete the journal or
+ownership records to unblock the app. Repair requires reconciling OS registration
+and retained files with the intended ownership state. Ordinary databases without
+pending operations migrate without changing installed-font records.
+
+Completed-operation receipts remain in SQLite as small provenance records; there
+is no automatic receipt pruning. New operations use fresh UUIDs. A receipt is not
+an authentication boundary against local tampering, nor does it make two separate
+filesystems/databases power-loss atomic. Tests use temporary files and a fake font
+system, not a user's fonts or Windows/macOS registration APIs. Actual installer,
+upgrade and OS-level recovery acceptance remains separate.

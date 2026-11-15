@@ -46,7 +46,9 @@ Use a snapshotted Windows VM with a dedicated disposable local standard user, no
 
 Sources: https://github.com/tauri-apps/tauri/tree/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis ; project paths.rs/install.rs/schedule.rs; directories-rs Windows path construction (https://github.com/dirs-dev/directories-rs/blob/master/src/win.rs).
 
-## Ownership and interrupted recovery review (2026-11-14)
+## Historical ownership and interrupted recovery review (2026-11-14)
+
+The code-path observations below describe that dated baseline, not the current receipt-based behavior. Current acceptance expectations are updated below.
 
 Reviewed on commit 9a95a83; this section changes documentation only. Source evidence: state.rs (WAL and installed_fonts), install.rs::backup/begin/recover/resolve/uninstall, engine.rs::uninstall/uninstall_inner, commands.rs::dashboard and cli.rs::run_cli. No live database was opened and no font operation was run.
 
@@ -74,12 +76,12 @@ The SQLite installed_fonts JSON record carries owned_files, version/variants and
 
 Add fault-injection cases to the mock FontSystem harness, then run equivalent lifecycle tests only in a disposable VM/account. Capture state before/after each boundary; do not fabricate a successful recovery result.
 
-- Uninstall interrupted after journal persistence/unregistration but before SQLite record deletion: restart must preserve/restore the old installation and registrations, then finish recovery consistently.
-- Uninstall interrupted after SQLite record deletion but before finish(): restart must complete only the selected font's removal and clear the journal; an unrelated control font remains unchanged.
-- Install/update interrupted before and after SQLite commit: verify old-versus-new state selection, hash checks, registration state and retained rollback snapshot.
-- Missing database + retained uninstall journal: explicitly reproduce the misclassification above using temp paths/mock fonts. Treat destructive cleanup of the database in this state as disallowed product behavior, even if the current resolver follows its existing committed branch.
+- Uninstall interrupted after journal persistence/unregistration but before SQLite record deletion: restart must retain all files and recovery evidence and report blocked recovery. It must not infer commit or restore registration automatically without a receipt.
+- Uninstall interrupted after the atomic ownership deletion and receipt commit but before finish(): restart must verify the receipt, complete only the selected font's removal and clear the journal; an unrelated control font remains unchanged.
+- Install/update interrupted before SQLite commit: recovery must block without changing files or registration. After the atomic ownership and receipt commit: verify receipt-gated cleanup, hash checks and retained rollback snapshot.
+- Missing database + retained uninstall journal: using temp paths/mock fonts, verify opening fails without creating a replacement database. Fonts, journal and backups must remain unchanged; missing ownership must never be treated as proof of commit.
 - Missing/corrupt database, malformed journal, missing/corrupt snapshot and externally modified font: retain the evidence set and expose a repair path; do not add automatic broad cleanup.
-- App uninstall/reinstall while a valid recovery journal exists: recovery data and the font set must survive app removal unchanged. Reinstalled app must resolve from coherent retained state, not from an empty replacement ledger.
+- App uninstall/reinstall while a valid recovery journal exists: recovery data and the font set must survive app removal unchanged. Reinstalled app may automatically finish only with a matching committed receipt; otherwise it must preserve and block, never resolve from an empty replacement ledger.
 - Settings-only reset with installed fonts: ownership, rollback linkage, license records required for operation, and unfinished recovery must not be erased. A future preferences reset needs selective settings handling, not database deletion.
 - Intentional complete removal: first resolve unfinished recovery, then explicitly remove selected managed fonts through the engine, verify no pending journal/remaining ownership, and only then separately confirm management-data cleanup. Keep unrelated fonts untouched. If the user intends to keep fonts, retain coherent management state rather than calling its destruction a harmless reset.
 - Scheduled/headless writer during cleanup: prevent races by stopping the installation-owned task/writer and acquiring the same operation lock before any future cleanup. A running GUI is not the only possible writer.
@@ -126,3 +128,14 @@ Scope: this is a guard against missing/uninitialized databases, NOT proof agains
 Independent review follow-up: the initial check established only installed_fonts table existence, not complete schema validity. A read-only prepare now checks the two columns recovery consumes before initialization; it still does not establish ledger identity or row integrity. Added isolated tests for non-SQLite bytes with unchanged journal/backup, a same-name table with wrong columns without extra schema creation, and committed schema/ownership visible only through an active uncheckpointed WAL. These tests await the next CI run; the writer is deliberately retained during WAL reopening.
 
 Verification follow-up: all six recovery-opening tests, including live WAL and invalid-ledger cases, passed on the Windows/macOS/Linux Rust jobs for code commit a5354e2 in CI run 43675784376. This is isolated test coverage, not execution against a real user's pending journal.
+
+
+### Receipt-based recovery acceptance
+
+Only a matching committed receipt permits automatic cleanup. A crash or failure
+before the SQLite transaction commits now preserves all font files and recovery
+evidence and blocks later operations; it does not automatically restore previous
+OS registration. Include both this blocked state and committed-cleanup retry in
+the disposable-account tests. Do not remove a journal or reset the ownership
+ledger to make the test proceed. Legacy pending journals also require repair;
+legacy databases with no pending journal migrate normally.
