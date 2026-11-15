@@ -30,3 +30,11 @@ This branch does not bump the release version or publish a build. Shipped alpha.
 Before release, test fresh installation, same-user upgrade, installation language, existing font retention, rollback, uninstall, and both macOS CPU architectures. Platform signing/notarization and real updater signature verification remain mandatory release checks.
 
 Local Rust test attempt: `cargo test -p fontferry-core --locked` stopped at dependency build scripts because this machine has no MSVC `link.exe`. This is an environment blocker, not a passing test or a demonstrated code failure. Cross-platform CI is required before merge. Rustup downloaded the pinned toolchain but could not create its proxy hardlinks in this sandbox; Cargo was invoked directly from the installed toolchain directory.
+
+## CI-discovered dependency repair (2026-11-15)
+
+The independent RustSec job on PR #34 found 17 vulnerability records beyond the original TLS issue. The lockfile now updates quinn-proto to 0.11.19, quinn-udp to 0.5.16, tokio to 1.53.3, rustix to 1.1.6 and the yanked async-executor/chacha20 releases to 1.14.1/0.10.2. Bundled SQLite moves through rusqlite 0.41.1 to libsqlite3-sys 0.39.1. Direct ZIP and the updater ZIP dependency both move to zip 9.5.1; updater 2.14.1 requires Tauri 2.12, so this repair necessarily updates the Tauri runtime/build dependency family as well. No application identity, update endpoint, public key or version changes accompany it.
+
+Our code uses the updater builder and check() without an allowDowngrades parameter or custom comparator. Signed update installation still requires disposable-profile acceptance testing. Existing font archive tests remain important because ZIP is a major-version migration; the font extractor continues to reject symlinks, path escapes and extraction-budget excess rather than calling ZipArchive::extract.
+
+notify-rust 4.19.0 uses zbus 6, while the pinned notification plugin remains 2.4.0 to avoid introducing a second direct zbus 5 dependency. The opener and single-instance plugins still retain zbus 5 and its three unmaintained companion advisories. glib 0.18.5 also has a pre-existing unsound iterator advisory. These are not silently ignored or claimed resolved. Cross-platform CI, not local metadata/format checks, must validate the dependency migration before merge. No installer or font mutation was executed.
