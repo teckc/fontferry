@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { exceptions, validateScope, validateAdvisory } from './maintenance-exceptions.mjs';
 
 function fixture() {
@@ -17,9 +18,10 @@ function fixture() {
     resolve: { nodes: Object.entries(graph).map(([id, dependencies]) => ({ id, dependencies })) },
   };
 }
-const deny = exceptions.map(e => `{ id = "${e.id}", reason = "expires 2026-12-15" }`).join('\n');
+const deny = readFileSync(new URL('../deny.toml', import.meta.url), 'utf8');
+const audit = readFileSync(new URL('../.cargo/audit.toml', import.meta.url), 'utf8');
 const date = new Date('2026-11-20T00:00:00Z');
-const validate = (metadata = fixture(), config = deny, audit = '') => validateScope(metadata, config, audit, date);
+const validate = (metadata = fixture(), config = deny, auditConfig = audit) => validateScope(metadata, config, auditConfig, date);
 const advisory = (e, kind = 'unmaintained') => `\x60\x60\x60toml\n[advisory]\nid = "${e.id}"\npackage = "${e.name}"\ninformational = "${kind}"\n[versions]\npatched = []\n\x60\x60\x60`;
 
 test('approved dependency scope and three notices pass before expiry', () => {
@@ -28,7 +30,7 @@ test('approved dependency scope and three notices pass before expiry', () => {
 });
 test('exact expiry, after expiry and invalid clocks fail closed', () => {
   for (const time of ['2026-12-15T00:00:00Z', '2027-01-01', '2026-11-14', 'invalid']) {
-    assert.throws(() => validateScope(fixture(), deny, '', new Date(time)), /expired|clock/);
+    assert.throws(() => validateScope(fixture(), deny, audit, new Date(time)), /expired|clock/);
   }
 });
 test('new consumers and changed versions require a fresh review', () => {
@@ -46,9 +48,18 @@ test('resolved dependencies force exception removal, not silent renewal', () => 
   assert.throws(() => validate(m), /scope changed/);
 });
 test('audit ignore, broad scope and undated reasons fail', () => {
-  assert.throws(() => validate(fixture(), deny, exceptions[0].id), /independent/);
-  assert.throws(() => validate(fixture(), `${deny}\nunmaintained = "none"`), /weakened/);
-  assert.throws(() => validate(fixture(), deny.replaceAll('2026-12-15', 'later')), /dated/);
+  assert.throws(() => validate(fixture(), deny, exceptions[0].id), /cargo-audit/);
+  assert.throws(() => validate(fixture(), `${deny}\nunmaintained = "none"`), /configuration changed/);
+  assert.throws(() => validate(fixture(), deny.replaceAll('2026-12-15', 'later')), /configuration changed/);
+});
+test('alternative TOML quoting and extra advisory exemptions cannot bypass review', () => {
+  for (const line of ["unmaintained = 'none'", '"unmaintained" = "none"',
+    "'unmaintained' = 'workspace'", 'unmaintained = "none" # broaden',
+    'unmaintained = "all"\nignore-expiry = "P999D"']) {
+    assert.throws(() => validate(fixture(), deny.replace('unmaintained = "all"', line)), /configuration changed/);
+  }
+  assert.throws(() => validate(fixture(), deny.replace('ignore = [', 'ignore = ["RUSTSEC-2026-9999",')), /configuration changed/);
+  validate(fixture(), deny.replace(/\r?\n/g, '\r\n'), audit.replace(/\r?\n/g, '\r\n'));
 });
 test('vulnerability, unsound, withdrawn, mismatched and malformed advisories fail', () => {
   const e = exceptions[0];

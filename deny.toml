@@ -1,4 +1,5 @@
 [advisories]
+unmaintained = "all"
 ignore = [
   { id = "RUSTSEC-2026-0370", reason = "Tauri opener/single-instance retain zbus5; unmaintained only; expires 2026-12-15; scripts/maintenance-exceptions.mjs enforces scope/date/type" },
   { id = "RUSTSEC-2026-0371", reason = "Tauri opener/single-instance retain zbus5; unmaintained only; expires 2026-12-15; scripts/maintenance-exceptions.mjs enforces scope/date/type" },

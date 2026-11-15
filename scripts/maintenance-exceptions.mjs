@@ -1,5 +1,12 @@
 import { readFile, appendFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { createHash } from 'node:crypto';
+
+// Freeze the reviewed complete configurations instead of approximating TOML parsing.
+// Any change (even alternative key/string syntax) requires an explicit new review.
+const approvedDeny = '3c462eacca66c1c52bb0047892dd82e34198cdd50dc4c1bbdb5b42bbe47446d9';
+const approvedAudit = '7bab4507aef5fefe32d5946eac1c8ecdc07b5413e2740be6f46448148beef921';
+const digest = text => createHash('sha256').update(text.replace(/\r\n/g, '\n')).digest('hex');
 
 export const deadline = '2026-12-15T00:00:00Z';
 export const started = '2026-11-15T00:00:00Z';
@@ -22,7 +29,8 @@ export function validateScope(metadata, deny, audit, now = new Date()) {
   if (!Number.isFinite(now.getTime()) || now < new Date(started) || now >= new Date(deadline)) {
     fail(`Maintenance exceptions expired or clock invalid; deadline ${deadline}. No automatic renewal.`);
   }
-  if (/unmaintained\s*=\s*"(?:none|workspace|transitive)"/.test(deny)) fail('Unmaintained scope was weakened');
+  if (digest(deny) !== approvedDeny) fail('Reviewed cargo-deny configuration changed; review required');
+  if (digest(audit) !== approvedAudit) fail('Independent cargo-audit configuration changed; review required');
   const packages = new Map(metadata.packages.map(p => [p.id, p]));
   if (!metadata.resolve?.nodes) fail('Cargo dependency resolution missing');
   for (const e of exceptions) {
