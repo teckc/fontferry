@@ -116,3 +116,9 @@ The candidate now returns a validated saved channel in Dashboard, restores it on
 Verification: 14 mocked UI tests pass, including selection-save-remount, existing beta restore, missing-setting fallback and failed-save rollback. Svelte check reports no errors/warnings and the frontend production build passes. The eight release/installer static tests also pass. Rust compilation remains blocked by missing MSVC; no claim is made that SQLite persistence was exercised through a compiled desktop binary.
 
 Remaining isolated acceptance test: in a disposable Windows profile, choose beta without checking the network, quit/relaunch and confirm beta persists; repeat stable and verify restart; fail the settings write and confirm the old choice is restored; check that the eventual update request uses the displayed channel. Do not change the owner's real settings for this test.
+
+## Recovery ledger initialization guard (2026-11-15)
+
+SqliteState::open now checks for font-operation.json before opening the ledger. While recovery evidence exists it omits SQLITE_OPEN_CREATE and requires the existing installed_fonts table before performing schema initialization. A missing database or empty SQLite file therefore cannot silently become a fresh empty ledger and drive the existing uninstall committed branch. Added temp-directory tests cover missing DB preservation, empty-schema rejection without initialization, and normal reopening of initialized state with a pending journal. These tests use no system fonts.
+
+Scope: this is a guard against missing/uninitialized databases, NOT proof against replacement with a different valid database or deletion of ownership rows in an existing schema. A future journal/ledger identity or transactional commit receipt is needed to distinguish those cases. Keep the existing prohibition on partial cleanup. Full Rust execution requires CI because the local MSVC linker is absent. Formatting and static release tests can run locally.

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use fontferry_core::{
     Activity, FontFerryError, InstalledFont, ObservedFont, Result, StateRepository,
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 #[derive(Debug)]
 pub struct SqliteState {
@@ -16,8 +16,36 @@ pub struct SqliteState {
 
 impl SqliteState {
     pub fn open(path: &Path) -> Result<Self> {
-        let connection =
-            Connection::open(path).map_err(|error| FontFerryError::State(error.to_string()))?;
+        let journal = path.with_file_name("font-operation.json");
+        let pending = journal
+            .try_exists()
+            .map_err(|error| FontFerryError::State(error.to_string()))?;
+        // A missing ledger is not an empty committed ledger. Never create one
+        // beside recovery evidence: uninstall recovery treats a missing row as committed.
+        let flags = if pending {
+            OpenFlags::SQLITE_OPEN_READ_WRITE
+        } else {
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE
+        };
+        let connection = Connection::open_with_flags(path, flags).map_err(|error| {
+            FontFerryError::State(format!(
+                "cannot open font ledger; preserve database, journal and backups: {error}"
+            ))
+        })?;
+        if pending {
+            let has_ledger: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='installed_fonts')",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|error| FontFerryError::State(error.to_string()))?;
+            if !has_ledger {
+                return Err(FontFerryError::State(
+                    "recovery journal exists without an initialized font ledger; preserve all recovery data for repair".into(),
+                ));
+            }
+        }
         connection
             .pragma_update(None, "journal_mode", "WAL")
             .map_err(|error| FontFerryError::State(error.to_string()))?;
@@ -320,5 +348,56 @@ impl StateRepository for SqliteState {
 
     async fn get_observed(&self, font_id: &str) -> Result<Option<ObservedFont>> {
         self.get_observed_sync(font_id)
+    }
+}
+
+#[cfg(test)]
+mod recovery_open_tests {
+    use super::*;
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+    #[test]
+    fn pending_journal_does_not_create_missing_database() -> TestResult {
+        let root = tempfile::tempdir()?;
+        let journal = root.path().join("font-operation.json");
+        std::fs::write(&journal, b"recovery evidence")?;
+        let database = root.path().join("fontferry.db");
+        assert!(SqliteState::open(&database).is_err());
+        assert!(!database.exists());
+        assert_eq!(std::fs::read(journal)?, b"recovery evidence");
+        Ok(())
+    }
+
+    #[test]
+    fn pending_journal_rejects_empty_database_without_initializing_schema() -> TestResult {
+        let root = tempfile::tempdir()?;
+        let database = root.path().join("fontferry.db");
+        drop(Connection::open(&database)?);
+        std::fs::write(root.path().join("font-operation.json"), b"evidence")?;
+        assert!(SqliteState::open(&database).is_err());
+        let connection = Connection::open(&database)?;
+        let count: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn initialized_ledger_can_reopen_for_pending_recovery() -> TestResult {
+        let root = tempfile::tempdir()?;
+        let database = root.path().join("fontferry.db");
+        let state = SqliteState::open(&database)?;
+        state.set_setting("update-channel", &"beta")?;
+        drop(state);
+        std::fs::write(root.path().join("font-operation.json"), b"evidence")?;
+        let state = SqliteState::open(&database)?;
+        assert_eq!(
+            state.get_setting::<String>("update-channel")?,
+            Some("beta".into())
+        );
+        Ok(())
     }
 }
