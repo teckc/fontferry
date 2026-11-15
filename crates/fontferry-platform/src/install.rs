@@ -22,6 +22,9 @@ pub struct PlatformFontInstaller {
 }
 
 trait FontSystem: std::fmt::Debug + Send + Sync {
+    fn check_ready(&self) -> Result<()> {
+        Ok(())
+    }
     fn directory(&self) -> Result<PathBuf>;
     fn copy(&self, source: &Path, target: &Path) -> Result<()> {
         copy_new(source, target)
@@ -36,6 +39,13 @@ trait FontSystem: std::fmt::Debug + Send + Sync {
 #[derive(Debug)]
 struct NativeFontSystem;
 impl FontSystem for NativeFontSystem {
+    fn check_ready(&self) -> Result<()> {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            run(std::process::Command::new("fc-cache").arg("--version"))?;
+        }
+        Ok(())
+    }
     fn directory(&self) -> Result<PathBuf> {
         platform::install_directory()
     }
@@ -142,6 +152,7 @@ impl PlatformFontInstaller {
                     .into(),
             ));
         }
+        self.system.check_ready()?;
         let directory = self.system.directory()?;
         fs::create_dir_all(&directory).map_err(platform_error)?;
         let old_files: BTreeSet<_> = old
@@ -326,6 +337,7 @@ impl PlatformFontInstaller {
     }
 
     fn resolve_committed(&self, operation: &Operation) -> Result<()> {
+        self.system.check_ready()?;
         self.validate_operation(operation)?;
         let old: BTreeSet<_> = operation.old_hashes.keys().cloned().collect();
         let target: BTreeSet<_> = operation.target.keys().cloned().collect();
@@ -472,6 +484,7 @@ impl FontInstaller for PlatformFontInstaller {
                     "unfinished operation requires recovery".into(),
                 ));
             }
+            this.system.check_ready()?;
             let (backup, old_hashes) = this.backup(&installed)?;
             let operation = Operation {
                 operation_id: Some(Uuid::new_v4().to_string()),
@@ -880,6 +893,7 @@ mod tests {
     struct TestSystem {
         root: PathBuf,
         registered: Mutex<BTreeSet<PathBuf>>,
+        fail_ready: AtomicBool,
         fail_register: AtomicBool,
         fail_copy: AtomicUsize,
         fail_remove: AtomicBool,
@@ -887,6 +901,14 @@ mod tests {
         fail_unregister: AtomicBool,
     }
     impl FontSystem for TestSystem {
+        fn check_ready(&self) -> Result<()> {
+            if self.fail_ready.load(Ordering::SeqCst) {
+                return Err(FontFerryError::Platform(
+                    "injected missing fontconfig".into(),
+                ));
+            }
+            Ok(())
+        }
         fn copy(&self, source: &Path, target: &Path) -> Result<()> {
             if self
                 .fail_copy
@@ -971,6 +993,7 @@ mod tests {
         let system = Arc::new(TestSystem {
             root: root.join("fonts"),
             registered: Mutex::new(BTreeSet::new()),
+            fail_ready: AtomicBool::new(false),
             fail_register: AtomicBool::new(false),
             fail_copy: AtomicUsize::new(0),
             fail_remove: AtomicBool::new(false),
@@ -1018,6 +1041,64 @@ mod tests {
             previous: outcome.previous_snapshot,
             manual_version: None,
         }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn native_fontconfig_preflight_rejects_empty_path() -> TestResult {
+        const PROBE: &str = "FONTFERRY_EMPTY_FONTCONFIG_PATH_PROBE";
+        if std::env::var_os(PROBE).is_some() {
+            assert!(NativeFontSystem.check_ready().is_err());
+            return Ok(());
+        }
+        let empty = tempfile::tempdir()?;
+        let status = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "install::tests::native_fontconfig_preflight_rejects_empty_path",
+            ])
+            .env(PROBE, "1")
+            .env("PATH", empty.path())
+            .status()?;
+        assert!(status.success());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_font_dependency_stops_before_mutation_or_cleanup() -> TestResult {
+        let root = tempfile::tempdir()?;
+        let (installer, system, state) = setup(root.path())?;
+        let font = definition()?;
+        let a = prepared(root.path(), "a.ttf", b"a")?;
+        system.fail_ready.store(true, Ordering::SeqCst);
+        assert!(
+            installer
+                .install(&font, "1", std::slice::from_ref(&a), None)
+                .await
+                .is_err()
+        );
+        assert!(!installer.journal().exists());
+        assert!(!system.root.exists());
+        assert_eq!(fs::read_dir(&installer.paths.backups)?.count(), 0);
+        system.fail_ready.store(false, Ordering::SeqCst);
+        let first = record(&font, "1", installer.install(&font, "1", &[a], None).await?);
+        installer.commit(&state, &font.id, Some(&first)).await?;
+        installer.finish(&state).await?;
+        system.fail_ready.store(true, Ordering::SeqCst);
+        assert!(installer.uninstall(&first).await.is_err());
+        assert!(!installer.journal().exists());
+        assert!(first.owned_files.iter().all(|p| p.exists()));
+        system.fail_ready.store(false, Ordering::SeqCst);
+        installer.uninstall(&first).await?;
+        installer.commit(&state, &font.id, None).await?;
+        let journal = fs::read(installer.journal())?;
+        system.fail_ready.store(true, Ordering::SeqCst);
+        assert!(installer.finish(&state).await.is_err());
+        assert_eq!(fs::read(installer.journal())?, journal);
+        assert!(first.owned_files.iter().all(|p| p.exists()));
+        system.fail_ready.store(false, Ordering::SeqCst);
+        installer.finish(&state).await?;
+        Ok(())
     }
 
     #[tokio::test]

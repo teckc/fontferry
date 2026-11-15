@@ -447,7 +447,7 @@ impl FontEngine {
     }
 
     /// Nonblocking OS lock, shared by GUI, CLI and recovery. Never delete the lock file.
-    pub fn acquire_operation_lock(&self) -> Result<std::fs::File> {
+    pub fn acquire_operation_lock(&self) -> Result<crate::OperationGuard> {
         crate::operation::acquire(&self.operation_lock_path)
     }
 

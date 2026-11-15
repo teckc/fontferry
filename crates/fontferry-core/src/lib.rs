@@ -10,5 +10,6 @@ pub mod version;
 pub use catalog::*;
 pub use engine::*;
 pub use error::*;
+pub use operation::OperationGuard;
 pub use ports::*;
 pub use version::*;
