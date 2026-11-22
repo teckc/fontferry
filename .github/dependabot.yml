@@ -14,6 +14,8 @@ updates:
     groups:
       frontend:
         patterns: ["*"]
+        # Major upgrades need individual compatibility review (notably TS/Svelte).
+        update-types: ["minor", "patch"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
