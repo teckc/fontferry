@@ -46,6 +46,7 @@ pub(super) async fn run_cli(command: CliCommand) -> Result<()> {
     state.engine.recover().await?;
     match command {
         CliCommand::Check(arguments) => {
+            refresh_font_awesome_scan(&state.state)?;
             let statuses = check_all(&state.engine).await;
             if arguments.json {
                 println!("{}", serde_json::to_string_pretty(&statuses)?);
@@ -72,6 +73,7 @@ pub(super) async fn run_cli(command: CliCommand) -> Result<()> {
             if !arguments.eligible {
                 anyhow::bail!("update requires --eligible");
             }
+            refresh_font_awesome_scan(&state.state)?;
             let installed_by_id: std::collections::HashMap<_, _> = state
                 .state
                 .list_installed()
@@ -83,6 +85,21 @@ pub(super) async fn run_cli(command: CliCommand) -> Result<()> {
             let mut reminders = Vec::new();
             for font in state.engine.fonts() {
                 let managed = installed_by_id.contains_key(&font.id);
+                if managed && font.delivery_policy == DeliveryPolicy::AutoInstall {
+                    // The engine fetches release metadata once, then rechecks
+                    // the current installation under the mutation lock if needed.
+                    match state.engine.update_installed(&font.id).await {
+                        Ok(Some(installed)) => {
+                            println!("{} -> {}", installed.font_id, installed.version)
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            failures += 1;
+                            eprintln!("{}: {error}", font.id);
+                        }
+                    }
+                    continue;
+                }
                 let observed = state.state.get_observed(&font.id).await?.is_some();
                 if !managed && !observed {
                     continue;
@@ -99,21 +116,10 @@ pub(super) async fn run_cli(command: CliCommand) -> Result<()> {
                         continue;
                     }
                 };
-                if !status.update_available || status.current_version.is_none() {
-                    continue;
-                }
-                if status.delivery_policy == DeliveryPolicy::AutoInstall {
-                    match state.engine.update_installed(&font.id).await {
-                        Ok(Some(installed)) => {
-                            println!("{} -> {}", installed.font_id, installed.version)
-                        }
-                        Ok(None) => {}
-                        Err(error) => {
-                            failures += 1;
-                            eprintln!("{}: {error}", font.id);
-                        }
-                    }
-                } else {
+                if status.delivery_policy == DeliveryPolicy::NotifyOnly
+                    && status.update_available
+                    && status.current_version.is_some()
+                {
                     println!("{}: update available (notification only)", font.id);
                     reminders.push(font.name);
                 }

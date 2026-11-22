@@ -1,6 +1,6 @@
 use crate::{FontFerryError, Result};
 use std::{
-    fs::{File, OpenOptions},
+    fs::{File, OpenOptions, TryLockError},
     path::Path,
 };
 
@@ -35,8 +35,11 @@ pub(crate) fn acquire(path: &Path) -> Result<OperationGuard> {
         .truncate(false)
         .open(path)
         .map_err(|e| FontFerryError::State(e.to_string()))?;
-    file.try_lock().map_err(|e| {
-        FontFerryError::State(format!("另一 FontFerry 进程正在操作字体，请稍后重试：{e}"))
+    file.try_lock().map_err(|error| match error {
+        TryLockError::WouldBlock => FontFerryError::OperationBusy,
+        TryLockError::Error(error) => {
+            FontFerryError::State(format!("cannot lock font operations: {error}"))
+        }
     })?;
     Ok(OperationGuard {
         file,
@@ -62,7 +65,7 @@ mod tests {
         // An alias models the shared open-file description retained by fork;
         // it is test-only, because the public guard does not expose its File.
         let descriptor_alias = guard.file.try_clone()?;
-        assert!(acquire(&lock).is_err());
+        assert!(matches!(acquire(&lock), Err(FontFerryError::OperationBusy)));
         drop(guard);
         let next = acquire(&lock)?;
         assert!(acquire(&lock).is_err());
@@ -72,6 +75,22 @@ mod tests {
         drop(next);
         let _next = acquire(&lock)?;
         assert!(lock.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_lock_path_is_not_contention() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        assert!(matches!(
+            acquire(
+                &directory
+                    .path()
+                    .join("missing-parent")
+                    .join("operation.lock")
+            ),
+            Err(FontFerryError::State(_))
+        ));
         Ok(())
     }
 

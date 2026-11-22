@@ -23,6 +23,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { cleanup, fireEvent, waitFor } from "@testing-library/svelte";
 import { afterEach } from "vitest";
 import catalog from "../../catalog/builtin/catalog.json";
+import type { UpdateStatus } from "./types";
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
@@ -108,6 +109,61 @@ async function openCatalog() {
   await waitFor(() => expect(screen.queryByText("正在读取字体状态…")).not.toBeInTheDocument());
   await fireEvent.click(screen.getByRole("button", { name: "Aa字体" }));
 }
+
+test("renders cached dashboard before background detection, then updates only the observed font", async () => {
+  const awesome = catalog.fonts.find(({ id }) => id === "font-awesome-pro")!;
+  const other = catalog.fonts[0];
+  const originalStatus: UpdateStatus = {
+    fontId: other.id, currentVersion: "1.0", availableVersion: "2.0",
+    updateAvailable: true, deliveryPolicy: "autoInstall",
+  };
+  let resolveScan!: (status: UpdateStatus) => void;
+  const pendingScan = new Promise<UpdateStatus>((resolve) => { resolveScan = resolve; });
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "refresh_local_font_observation") {
+      expect(screen.getByRole("heading", { name: "可用更新" })).toBeInTheDocument();
+      return pendingScan;
+    }
+    return { fonts: [awesome, other], installed: [], statuses: [originalStatus], activities: [] };
+  });
+  render(App);
+  expect(await screen.findByRole("button", { name: new RegExp(other.name) })).toBeInTheDocument();
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("refresh_local_font_observation"));
+  await openCatalog();
+  await fireEvent.click(screen.getByRole("button", { name: /Font Awesome Pro/ }));
+  expect(screen.getByRole("dialog")).toHaveTextContent("尚无安装记录");
+
+  resolveScan({
+    fontId: awesome.id, currentVersion: "6.4.2", availableVersion: null,
+    updateAvailable: false, deliveryPolicy: "notifyOnly",
+  });
+  await waitFor(() => expect(screen.getByRole("dialog")).toHaveTextContent("6.4.2"));
+  expect(screen.getByRole("heading", { name: "字体" })).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+  await fireEvent.click(screen.getByRole("button", { name: "◫概览" }));
+  expect(screen.getByRole("button", { name: new RegExp(other.name) })).toHaveTextContent("1.0 → 2.0");
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "dashboard")).toHaveLength(1);
+});
+
+test("busy committed snapshot supports browsing and enables font actions on successful retry", async () => {
+  const font = { ...catalog.fonts[0], license: { ...catalog.fonts[0].license, requiresAcceptance: false } };
+  let busy = true;
+  vi.mocked(invoke).mockImplementation(async () => ({
+    fonts: [font], installed: [], statuses: [], activities: [], operationBusy: busy,
+  }));
+  render(App);
+  expect(await screen.findByText("另一个字渡进程正在处理字体")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "检查字体更新" })).toBeDisabled();
+  await openCatalog();
+  await fireEvent.click(screen.getByRole("button", { name: new RegExp(font.name) }));
+  expect(screen.getByRole("button", { name: "安装字体" })).toBeDisabled();
+  await fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+  busy = false;
+  await fireEvent.click(screen.getByRole("button", { name: "刷新状态" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "检查字体更新" })).toBeEnabled());
+  expect(screen.queryByText("另一个字渡进程正在处理字体")).not.toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "字体" })).toBeInTheDocument();
+});
 
 test("filters management status together with search and clears empty results", async () => {
   const first = { ...catalog.fonts[0], id: "alpha", name: "Alpha" };

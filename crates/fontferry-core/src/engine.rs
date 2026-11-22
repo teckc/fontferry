@@ -30,17 +30,11 @@ impl UpdateStatus {
     pub fn refresh_local(&mut self, current: Option<String>, fingerprint: bool) {
         self.current_version = current;
         self.from_cache = true;
-        self.update_available = match (&self.current_version, &self.available_version) {
-            (Some(current), Some(available)) => {
-                if fingerprint {
-                    current != available
-                } else {
-                    is_update_available(current, available)
-                }
-            }
-            (None, Some(_)) => true,
-            _ => false,
-        };
+        self.update_available = version_update_available(
+            self.current_version.as_deref(),
+            self.available_version.as_deref(),
+            fingerprint,
+        );
     }
 }
 
@@ -138,14 +132,14 @@ impl FontEngine {
             font_id: font_id.to_owned(),
             current_version: current.cloned(),
             available_version: available.map(str::to_owned),
-            update_available: match (current, available) {
-                (Some(current), Some(available)) => match font.version_provider {
-                    crate::VersionProvider::HttpFingerprint { .. } => current != available,
-                    _ => is_update_available(current, available),
-                },
-                (None, Some(_)) => true,
-                _ => false,
-            },
+            update_available: version_update_available(
+                current.map(String::as_str),
+                available,
+                matches!(
+                    font.version_provider,
+                    crate::VersionProvider::HttpFingerprint { .. }
+                ),
+            ),
             delivery_policy: font.delivery_policy,
             checked_at: Some(OffsetDateTime::now_utc()),
             from_cache: false,
@@ -157,7 +151,7 @@ impl FontEngine {
         let _process_guard = self.acquire_operation_lock()?;
         self.installer.recover(self.state.as_ref()).await?;
         let font_id = request.font_id.clone();
-        let result = self.install_inner(request).await;
+        let result = self.install_inner(request, None).await;
         match result {
             Ok(value) => {
                 self.report_activity(
@@ -182,7 +176,11 @@ impl FontEngine {
         }
     }
 
-    async fn install_inner(&self, mut request: InstallRequest) -> Result<InstalledFont> {
+    async fn install_inner(
+        &self,
+        mut request: InstallRequest,
+        fresh_release: Option<&Release>,
+    ) -> Result<InstalledFont> {
         request.variant_ids.sort();
         request.variant_ids.dedup();
         let font = self.font(&request.font_id)?.clone();
@@ -213,12 +211,19 @@ impl FontEngine {
                 .await?;
         }
 
-        let releases = self
-            .releases
-            .releases(&font, &font.version_provider)
-            .await?;
+        let fetched;
+        let releases = match fresh_release {
+            Some(release) => std::slice::from_ref(release),
+            None => {
+                fetched = self
+                    .releases
+                    .releases(&font, &font.version_provider)
+                    .await?;
+                &fetched
+            }
+        };
         let release = requested_release(
-            &releases,
+            releases,
             request.version.as_deref(),
             release_channel(&font.version_provider),
             &font.version_policy,
@@ -283,16 +288,19 @@ impl FontEngine {
         Ok(installed)
     }
 
-    /// Scheduled updates read the current variant selection and version under the operation lock.
+    /// Scheduled updates confirm the current variant selection and version under the operation lock.
     pub async fn update_installed(&self, font_id: &str) -> Result<Option<InstalledFont>> {
-        let _guard = self.operation_lock.lock().await;
-        let _process_guard = self.acquire_operation_lock()?;
-        self.installer.recover(self.state.as_ref()).await?;
-        let Some(current) = self.state.get_installed(font_id).await? else {
+        let font = self.font(font_id)?;
+        if font.delivery_policy != DeliveryPolicy::AutoInstall {
+            return Ok(None);
+        }
+        let Some(candidate) = self.state.get_installed(font_id).await? else {
             return Ok(None);
         };
-        let status = match self.check_font(font_id).await {
-            Ok(status) => status,
+        // Do not block unrelated operations while checking a source. The result is
+        // scoped to this attempt and is never replaced with stale metadata.
+        let releases = match self.releases.releases(font, &font.version_provider).await {
+            Ok(releases) => releases,
             Err(error) => {
                 self.report_activity(
                     Some(font_id.into()),
@@ -303,12 +311,31 @@ impl FontEngine {
                 return Err(error);
             }
         };
-        if !status.update_available {
+        let Some(available) = select_latest(
+            &releases,
+            release_channel(&font.version_provider),
+            &font.version_policy,
+        ) else {
+            return Ok(None);
+        };
+        if !installed_update_available(font, &candidate, available) {
+            return Ok(None);
+        }
+
+        let _guard = self
+            .operation_lock
+            .try_lock()
+            .map_err(|_| FontFerryError::OperationBusy)?;
+        let _process_guard = self.acquire_operation_lock()?;
+        self.installer.recover(self.state.as_ref()).await?;
+        let Some(current) = self.state.get_installed(font_id).await? else {
+            return Ok(None);
+        };
+        if !installed_update_available(font, &current, available) {
             return Ok(None);
         }
         let variants = if current.variant_ids.is_empty() {
-            self.font(font_id)?
-                .variants
+            font.variants
                 .iter()
                 .filter(|v| v.default)
                 .map(|v| v.id.clone())
@@ -317,12 +344,15 @@ impl FontEngine {
             current.variant_ids
         };
         match self
-            .install_inner(InstallRequest {
-                font_id: font_id.into(),
-                version: status.available_version,
-                variant_ids: variants,
-                accept_license: false,
-            })
+            .install_inner(
+                InstallRequest {
+                    font_id: font_id.into(),
+                    version: Some(available.version.clone()),
+                    variant_ids: variants,
+                    accept_license: false,
+                },
+                Some(available),
+            )
             .await
         {
             Ok(value) => Ok(Some(value)),
@@ -451,6 +481,14 @@ impl FontEngine {
         crate::operation::acquire(&self.operation_lock_path)
     }
 
+    /// Recover under the shared OS lock and keep it held for a consistent read.
+    /// A busy lock is reported without waiting on the process-local mutation mutex.
+    pub async fn acquire_recovered_read(&self) -> Result<crate::OperationGuard> {
+        let guard = self.acquire_operation_lock()?;
+        self.installer.recover(self.state.as_ref()).await?;
+        Ok(guard)
+    }
+
     pub async fn recover(&self) -> Result<()> {
         let _guard = self.operation_lock.lock().await;
         let _process_guard = self.acquire_operation_lock()?;
@@ -502,6 +540,39 @@ impl FontEngine {
     }
 }
 
+fn version_update_available(
+    current: Option<&str>,
+    available: Option<&str>,
+    fingerprint: bool,
+) -> bool {
+    match (current, available) {
+        (Some(current), Some(available)) if fingerprint => current != available,
+        (Some(current), Some(available)) => is_update_available(current, available),
+        (None, Some(_)) => true,
+        _ => false,
+    }
+}
+
+fn installed_update_available(
+    font: &FontDefinition,
+    current: &InstalledFont,
+    available: &Release,
+) -> bool {
+    version_update_available(
+        Some(
+            current
+                .manual_version
+                .as_deref()
+                .unwrap_or(&current.version),
+        ),
+        Some(&available.version),
+        matches!(
+            font.version_provider,
+            crate::VersionProvider::HttpFingerprint { .. }
+        ),
+    )
+}
+
 fn release_channel(provider: &crate::VersionProvider) -> ReleaseChannel {
     match provider {
         crate::VersionProvider::GitHubRelease { channel, .. } => *channel,
@@ -534,7 +605,7 @@ mod tests {
         path::{Path, PathBuf},
         sync::{
             Arc,
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
     };
 
@@ -857,6 +928,187 @@ mod tests {
         }
     }
 
+    struct CountingReleases {
+        lock_path: PathBuf,
+        calls: AtomicUsize,
+        state: Arc<FailingState>,
+        installed_during_fetch: Mutex<Option<InstalledFont>>,
+        offline: AtomicBool,
+    }
+
+    #[async_trait]
+    impl ReleaseSource for CountingReleases {
+        async fn releases(
+            &self,
+            font: &FontDefinition,
+            provider: &VersionProvider,
+        ) -> Result<Vec<Release>> {
+            // A concurrent operation must be able to finish during the lookup.
+            let _guard = crate::operation::acquire(&self.lock_path)?;
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if let Some(installed) = self.installed_during_fetch.lock().await.take() {
+                self.state.save_installed(&installed).await?;
+            }
+            if self.offline.load(Ordering::SeqCst) {
+                return Err(FontFerryError::Network("injected offline check".into()));
+            }
+            StaticReleases.releases(font, provider).await
+        }
+    }
+
+    #[tokio::test]
+    async fn scheduled_updates_fetch_once_without_lock_and_recheck_current_state()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let staging = tempfile::tempdir()?;
+        let state = Arc::new(FailingState::default());
+        let mut definition = font(DeliveryPolicy::AutoInstall)?;
+        definition.variants = ["default", "selected"]
+            .map(|id| crate::Variant {
+                id: id.into(),
+                name: id.into(),
+                description: String::new(),
+                asset_pattern: "font\\.zip".into(),
+                default: id == "default",
+            })
+            .to_vec();
+        let releases = Arc::new(CountingReleases {
+            lock_path: staging.path().join("operations.lock"),
+            calls: AtomicUsize::new(0),
+            state: state.clone(),
+            installed_during_fetch: Mutex::new(None),
+            offline: AtomicBool::new(false),
+        });
+        let engine = FontEngine::new(
+            vec![definition],
+            releases.clone(),
+            Arc::new(EmptyArtifact),
+            Arc::new(PreparedArtifact),
+            Arc::new(TrackingInstaller {
+                uninstall_count: Arc::new(AtomicUsize::new(0)),
+            }),
+            state.clone(),
+            staging.path().into(),
+        );
+        assert!(engine.update_installed("test-font").await?.is_none());
+        assert_eq!(releases.calls.load(Ordering::SeqCst), 0);
+
+        let original = InstalledFont {
+            font_id: "test-font".into(),
+            version: "1.0.0".into(),
+            variant_ids: vec!["default".into()],
+            owned_files: vec![],
+            previous: None,
+            manual_version: None,
+            installed_at: datetime!(2026-01-01 0:00 UTC),
+        };
+        state.save_installed(&original).await?;
+        *releases.installed_during_fetch.lock().await = Some(InstalledFont {
+            variant_ids: vec!["selected".into()],
+            ..original.clone()
+        });
+        let installed = engine
+            .update_installed("test-font")
+            .await?
+            .ok_or("no scheduled update")?;
+        assert_eq!(releases.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(installed.version, "2.0.0");
+        assert_eq!(installed.variant_ids, vec!["selected"]);
+        assert_eq!(
+            state.get_installed("test-font").await?,
+            Some(installed.clone())
+        );
+
+        // The no-update fast path does not wait on the local operation mutex.
+        {
+            let _busy = engine.operation_lock.lock().await;
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                engine.update_installed("test-font"),
+            )
+            .await??;
+            assert!(outcome.is_none());
+        }
+        assert_eq!(releases.calls.load(Ordering::SeqCst), 2);
+
+        // A concurrent installation advances the version before revalidation.
+        state.save_installed(&original).await?;
+        *releases.installed_during_fetch.lock().await = Some(InstalledFont {
+            version: "3.0.0".into(),
+            ..installed
+        });
+        assert!(engine.update_installed("test-font").await?.is_none());
+        assert_eq!(releases.calls.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            state
+                .get_installed("test-font")
+                .await?
+                .ok_or("missing state")?
+                .version,
+            "3.0.0"
+        );
+
+        // A later failed lookup cannot use an earlier invocation's good metadata.
+        state.save_installed(&original).await?;
+        releases.offline.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            engine.update_installed("test-font").await,
+            Err(FontFerryError::Network(_))
+        ));
+        assert_eq!(releases.calls.load(Ordering::SeqCst), 4);
+        assert_eq!(state.get_installed("test-font").await?, Some(original));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovered_read_uses_only_the_os_lock_and_keeps_it_until_drop()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let staging = tempfile::tempdir()?;
+        let recoveries = Arc::new(AtomicUsize::new(0));
+        let engine = FontEngine::new(
+            vec![],
+            Arc::new(StaticReleases),
+            Arc::new(EmptyArtifact),
+            Arc::new(PreparedArtifact),
+            Arc::new(TrackingInstaller {
+                uninstall_count: recoveries.clone(),
+            }),
+            Arc::new(FailingState::default()),
+            staging.path().into(),
+        );
+        let _mutex = engine.operation_lock.lock().await;
+        let process_guard = engine.acquire_operation_lock()?;
+        {
+            let mut read = std::pin::pin!(engine.acquire_recovered_read());
+            let std::task::Poll::Ready(Err(FontFerryError::OperationBusy)) =
+                std::future::Future::poll(
+                    read.as_mut(),
+                    &mut std::task::Context::from_waker(std::task::Waker::noop()),
+                )
+            else {
+                panic!("read did not fail fast before recovery")
+            };
+        }
+        assert_eq!(recoveries.load(Ordering::SeqCst), 0);
+        drop(process_guard);
+
+        let mut recovered = std::pin::pin!(engine.acquire_recovered_read());
+        let std::task::Poll::Ready(result) = std::future::Future::poll(
+            recovered.as_mut(),
+            &mut std::task::Context::from_waker(std::task::Waker::noop()),
+        ) else {
+            panic!("read waited on the local mutex")
+        };
+        let read_guard = result?;
+        assert_eq!(recoveries.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            engine.acquire_operation_lock(),
+            Err(FontFerryError::OperationBusy)
+        ));
+        drop(read_guard);
+        let _next = engine.acquire_operation_lock()?;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn scheduled_recheck_failure_is_recorded_with_font_and_reason()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -885,6 +1137,13 @@ mod tests {
             staging.path().into(),
         );
         assert!(engine.update_installed("test-font").await.is_err());
+        assert_eq!(
+            state
+                .get_installed("test-font")
+                .await?
+                .map(|installed| installed.version),
+            Some("1.0".into())
+        );
         let activities = state.activities.lock().await;
         assert!(
             activities

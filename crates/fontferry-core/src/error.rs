@@ -26,6 +26,8 @@ pub enum FontFerryError {
     Platform(String),
     #[error("state operation failed: {0}")]
     State(String),
+    #[error("另一 FontFerry 进程正在操作字体，请稍后重试")]
+    OperationBusy,
     #[error("网络操作失败：{0}")]
     Network(String),
 }
