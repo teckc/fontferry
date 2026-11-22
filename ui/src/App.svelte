@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import type {
     Dashboard,
     FontDefinition,
@@ -40,6 +40,10 @@
   let appUpdateAvailable = false;
   let theme: Theme = "system";
   let operation: Operation | null = null;
+  let backgroundScanScheduled = false;
+  let statusRequestRevision = 0;
+  let destroyed = false;
+  $: fontActionsDisabled = loading || data.operationBusy === true;
 
   const navigation: { id: Page; label: string; symbol: string }[] = [
     { id: "dashboard", label: "概览", symbol: "◫" },
@@ -54,6 +58,7 @@
     if (savedTheme === "light" || savedTheme === "dark") theme = savedTheme;
     applyTheme();
     void load();
+    return () => { destroyed = true; };
   });
 
   function applyTheme() {
@@ -88,6 +93,7 @@
   }
 
   async function load() {
+    const requestRevision = ++statusRequestRevision;
     loading = true;
     error = "";
     try {
@@ -97,10 +103,30 @@
         updateChannel = data.updateChannel === "beta" ? "beta" : "stable";
         channelLoaded = true;
       }
+      if (!backgroundScanScheduled && data.fonts.some(({ id }) => id === "font-awesome-pro")) {
+        backgroundScanScheduled = true;
+        // Let Svelte publish the cached snapshot before asking the backend to scan.
+        void tick().then(() => {
+          if (!destroyed) window.setTimeout(() => void refreshLocalObservation(requestRevision), 0);
+        });
+      }
     } catch (cause) {
       error = String(cause);
     } finally {
       loading = false;
+    }
+  }
+
+  async function refreshLocalObservation(requestRevision: number) {
+    if (destroyed) return;
+    try {
+      const updated = await invoke<UpdateStatus | null>("refresh_local_font_observation");
+      if (updated && !destroyed && requestRevision === statusRequestRevision) {
+        data.statuses = [...data.statuses.filter(({ fontId }) => fontId !== updated.fontId), updated];
+      }
+    } catch (cause) {
+      // Keep the committed snapshot available when optional local discovery fails.
+      console.warn("Could not refresh local font observation", cause);
     }
   }
 
@@ -129,7 +155,8 @@
   }
 
   async function check(fontId: string) {
-    if (operation) return;
+    if (operation || fontActionsDisabled) return;
+    ++statusRequestRevision;
     operation = {
       kind: "check-fonts",
       title: "正在检查字体更新",
@@ -149,7 +176,8 @@
   }
 
   async function checkAllUpdates() {
-    if (operation) return;
+    if (operation || fontActionsDisabled) return;
+    ++statusRequestRevision;
     operation = {
       kind: "check-fonts",
       title: "正在检查所有字体",
@@ -178,7 +206,7 @@
   }
 
   async function install(font: FontDefinition) {
-    if (operation || (font.license.requiresAcceptance && !licenseAccepted)) return;
+    if (operation || fontActionsDisabled || (font.license.requiresAcceptance && !licenseAccepted)) return;
     operation = {
       kind: "install-font",
       title: `正在安装 ${font.name}`,
@@ -206,7 +234,7 @@
   }
 
   async function remove(font: FontDefinition) {
-    if (operation) return;
+    if (operation || fontActionsDisabled) return;
     if (!window.confirm(`卸载由字渡安装的 ${font.name}？`)) return;
     operation = { kind: "remove-font", title: `正在卸载 ${font.name}`, detail: "只移除由字渡管理的字体文件。" };
     error = "";
@@ -224,7 +252,7 @@
   }
 
   async function rollback(font: FontDefinition) {
-    if (operation) return;
+    if (operation || fontActionsDisabled) return;
     operation = { kind: "rollback-font", title: `正在恢复 ${font.name}`, detail: "正在恢复上一版本，请稍候。" };
     error = "";
     message = "";
@@ -240,6 +268,7 @@
   }
 
   async function saveSource() {
+    if (fontActionsDisabled) return;
     error = "";
     const repository = sourceRepository.trim();
     const homepage = sourceHomepage.trim() || `https://github.com/${repository}`;
@@ -287,6 +316,7 @@
   }
 
   async function setSchedule() {
+    if (fontActionsDisabled) return;
     try {
       error = "";
       message = "";
@@ -308,7 +338,7 @@
   }
 
   async function saveManualVersion(font: FontDefinition) {
-    if (operation) return;
+    if (operation || fontActionsDisabled) return;
     error = "";
     message = "";
     operation = { kind: "save-version", title: "正在保存版本", detail: font.name };
@@ -377,7 +407,7 @@
   }
 
   async function refreshCatalog() {
-    if (operation) return;
+    if (operation || fontActionsDisabled) return;
     operation = {
       kind: "refresh-catalog",
       title: "正在更新字体列表",
@@ -447,7 +477,7 @@
       <div>
         <h1>{navigation.find((item) => item.id === page)?.label}</h1>
       </div>
-      <button class="primary" onclick={checkAllUpdates} disabled={operation !== null}>
+      <button class="primary" onclick={checkAllUpdates} disabled={operation !== null || fontActionsDisabled}>
         {#if operation?.kind === "check-fonts"}<span class="button-spinner"></span>{/if}
         {operation?.kind === "check-fonts" ? "正在检查…" : "检查字体更新"}
       </button>
@@ -458,6 +488,13 @@
     {/if}
     {#if message}
       <div class="notice success" role="status" aria-live="polite"><span>✓</span><p>{message}</p></div>
+    {/if}
+    {#if data.operationBusy}
+      <div class="notice" role="status" aria-live="polite"><div>
+        <strong>另一个字渡进程正在处理字体</strong>
+        <p>当前显示上次写入数据库的状态。待操作完成后，刷新状态即可恢复字体操作。</p>
+        <button class="quiet" onclick={load} disabled={loading}>刷新状态</button>
+      </div></div>
     {/if}
     {#if operation}
       <div class="operation-status" role="status" aria-live="polite" data-testid="operation-status">
@@ -562,7 +599,7 @@
           {:else}
             <label>公开 HTTPS 地址<input bind:value={sourceHomepage} placeholder="https://example.com/font/" /></label>
           {/if}
-          <button class="primary" onclick={saveSource} disabled={!sourceId || !sourceName}>保存来源</button>
+          <button class="primary" onclick={saveSource} disabled={fontActionsDisabled || !sourceId || !sourceName}>保存来源</button>
         </article>
         <article class="panel guidance">
           <h2>添加前请确认</h2>
@@ -583,7 +620,7 @@
           <h2>每日自动更新</h2>
           {#if data.scheduleEnabled === null}<p role="status">上次计划任务操作未完成，实际状态尚未确认。请选择目标状态并重新保存。</p>{/if}
           <label class="switch-row"><span><strong>每天自动更新已管理的字体</strong><small>自动安装字渡管理字体的可用更新；只提醒的来源不会自动安装。关闭窗口后仍会运行。</small></span><input type="checkbox" bind:checked={scheduleEnabled} /></label>
-          <button class="primary" onclick={setSchedule}>保存</button>
+          <button class="primary" onclick={setSchedule} disabled={fontActionsDisabled}>保存</button>
         </article>
         <article class="panel">
           <h2>程序更新</h2>
@@ -604,7 +641,7 @@
           <h2>字体列表</h2>
           <div class="setting-row"><span><strong>内置字体</strong><small>随字渡提供，离线也可查看</small></span><span class="pill">可用</span></div>
           <div class="setting-row"><span><strong>在线字体列表</strong><small>更新失败时继续使用上次保存的内容</small></span></div>
-          <button class="quiet" onclick={refreshCatalog} disabled={operation !== null}>
+          <button class="quiet" onclick={refreshCatalog} disabled={operation !== null || fontActionsDisabled}>
             {#if operation?.kind === "refresh-catalog"}<span class="button-spinner"></span>{/if}
             {operation?.kind === "refresh-catalog" ? "正在更新…" : "更新字体列表"}
           </button>
@@ -624,4 +661,4 @@
   </main>
 </div>
 
-<FontDetails bind:selected bind:selectedVariants bind:manualVersion bind:licenseAccepted {message} {error} {operation} installedFonts={data.installed} statuses={data.statuses} {toggleVariant} {check} {install} {remove} {rollback} {saveManualVersion} />
+<FontDetails bind:selected bind:selectedVariants bind:manualVersion bind:licenseAccepted {message} {error} {operation} {fontActionsDisabled} installedFonts={data.installed} statuses={data.statuses} {toggleVariant} {check} {install} {remove} {rollback} {saveManualVersion} />

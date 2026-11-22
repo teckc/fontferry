@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use fontferry_core::{
     Activity, FontFerryError, InstalledFont, ObservedFont, Result, StateRepository,
 };
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
 #[derive(Debug)]
 pub struct SqliteState {
@@ -200,9 +200,14 @@ impl SqliteState {
     }
 
     pub fn save_observed(&self, observed: &ObservedFont) -> Result<()> {
+        let connection = self.lock()?;
+        Self::write_observed(&connection, observed)
+    }
+
+    fn write_observed(connection: &Connection, observed: &ObservedFont) -> Result<()> {
         let json = serde_json::to_string(observed)
             .map_err(|error| FontFerryError::State(error.to_string()))?;
-        self.lock()?
+        connection
             .execute(
                 "INSERT INTO observed_fonts(font_id, record_json) VALUES (?1, ?2)
                  ON CONFLICT(font_id) DO UPDATE SET record_json = excluded.record_json",
@@ -213,10 +218,22 @@ impl SqliteState {
     }
 
     pub fn save_scan_result(&self, mut observed: ObservedFont) -> Result<()> {
-        if let Some(existing) = self.get_observed_sync(&observed.font_id)? {
+        let mut connection = self.lock()?;
+        // Both a running GUI and the scheduled process may have their own
+        // connection. Start the write transaction before the read/merge.
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| FontFerryError::State(error.to_string()))?;
+        if let Some(existing) = Self::read_observed(&transaction, &observed.font_id)? {
+            if existing.scanned_at > observed.scanned_at {
+                return Ok(());
+            }
             observed.manual_version = existing.manual_version;
         }
-        self.save_observed(&observed)
+        Self::write_observed(&transaction, &observed)?;
+        transaction
+            .commit()
+            .map_err(|error| FontFerryError::State(error.to_string()))
     }
 
     pub fn set_observed_manual_version(
@@ -224,21 +241,32 @@ impl SqliteState {
         font_id: &str,
         version: Option<String>,
     ) -> Result<()> {
-        let mut observed = self
-            .get_observed_sync(font_id)?
-            .unwrap_or_else(|| ObservedFont {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| FontFerryError::State(error.to_string()))?;
+        let mut observed =
+            Self::read_observed(&transaction, font_id)?.unwrap_or_else(|| ObservedFont {
                 font_id: font_id.to_owned(),
                 detected_version: None,
                 manual_version: None,
                 observed_files: Vec::new(),
-                scanned_at: time::OffsetDateTime::now_utc(),
+                // This row starts as a manual override, not a new scan.
+                scanned_at: time::OffsetDateTime::UNIX_EPOCH,
             });
         observed.manual_version = version;
-        self.save_observed(&observed)
+        Self::write_observed(&transaction, &observed)?;
+        transaction
+            .commit()
+            .map_err(|error| FontFerryError::State(error.to_string()))
     }
 
     fn get_observed_sync(&self, font_id: &str) -> Result<Option<ObservedFont>> {
         let connection = self.lock()?;
+        Self::read_observed(&connection, font_id)
+    }
+
+    fn read_observed(connection: &Connection, font_id: &str) -> Result<Option<ObservedFont>> {
         let json: Option<String> = connection
             .query_row(
                 "SELECT record_json FROM observed_fonts WHERE font_id = ?1",
@@ -441,6 +469,39 @@ impl StateRepository for SqliteState {
 mod recovery_open_tests {
     use super::*;
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+    #[test]
+    fn background_scan_and_manual_override_preserve_each_others_fields() -> TestResult {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("fontferry.db");
+        let scanner = SqliteState::open(&path)?;
+        let manual = SqliteState::open(&path)?;
+        let id = "font-awesome-pro";
+        manual.set_observed_manual_version(id, Some("7.2".into()))?;
+        let older = ObservedFont {
+            font_id: id.into(),
+            detected_version: Some("6.6".into()),
+            manual_version: None,
+            observed_files: vec!["old.otf".into()],
+            scanned_at: time::OffsetDateTime::from_unix_timestamp(100)?,
+        };
+        let mut newer = older.clone();
+        newer.detected_version = Some("7.1".into());
+        newer.observed_files = vec!["new.otf".into()];
+        newer.scanned_at = time::OffsetDateTime::from_unix_timestamp(200)?;
+        scanner.save_scan_result(newer)?;
+        scanner.save_scan_result(older)?;
+        let observed = manual.get_observed_sync(id)?.ok_or("missing observation")?;
+        assert_eq!(observed.manual_version.as_deref(), Some("7.2"));
+        assert_eq!(observed.detected_version.as_deref(), Some("7.1"));
+        manual.set_observed_manual_version(id, None)?;
+        let observed = scanner
+            .get_observed_sync(id)?
+            .ok_or("missing observation")?;
+        assert!(observed.manual_version.is_none());
+        assert_eq!(observed.detected_version.as_deref(), Some("7.1"));
+        Ok(())
+    }
 
     #[test]
     fn pending_journal_does_not_create_missing_database() -> TestResult {

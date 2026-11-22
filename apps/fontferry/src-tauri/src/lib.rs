@@ -2,7 +2,13 @@ mod cli;
 mod commands;
 use cli::{Cli, run_cli};
 
-use std::{fs, sync::Arc};
+use std::{
+    fs,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -28,12 +34,14 @@ const REMOTE_CATALOG: &str =
     "https://raw.githubusercontent.com/teckc/fontferry/catalog/catalog.json";
 const REMOTE_CATALOG_SIGNATURE: &str =
     "https://raw.githubusercontent.com/teckc/fontferry/catalog/catalog.json.sig";
+const FONT_AWESOME_PRO: &str = "font-awesome-pro";
 
 pub struct AppState {
     engine: Arc<FontEngine>,
     state: Arc<SqliteState>,
     http: Arc<HttpClient>,
     paths: AppPaths,
+    font_scan_started: AtomicBool,
     _log_guard: tracing_appender::non_blocking::WorkerGuard,
 }
 
@@ -53,6 +61,7 @@ struct Dashboard {
     installed: Vec<InstalledFont>,
     statuses: Vec<UpdateStatus>,
     activities: Vec<fontferry_core::Activity>,
+    operation_busy: bool,
     schedule_enabled: Option<bool>,
     update_channel: String,
 }
@@ -111,6 +120,7 @@ fn run_gui() -> Result<()> {
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::dashboard,
+            refresh_local_font_observation,
             commands::check_font,
             commands::check_updates,
             commands::install_font,
@@ -141,9 +151,6 @@ fn create_state() -> Result<AppState> {
     .context("load catalog")?;
     let mut fonts = catalog.fonts;
     let state = Arc::new(SqliteState::open(&paths.database())?);
-    if let Some(observed) = scan_font_awesome() {
-        state.save_scan_result(observed)?;
-    }
     for source in state.list_user_sources()? {
         if fonts.iter().any(|font| font.id == source.id) {
             anyhow::bail!(
@@ -172,8 +179,40 @@ fn create_state() -> Result<AppState> {
         state,
         http,
         paths,
+        font_scan_started: AtomicBool::new(false),
         _log_guard: log_guard,
     })
+}
+
+fn refresh_font_awesome_scan(state: &SqliteState) -> Result<bool> {
+    let Some(observed) = scan_font_awesome() else {
+        return Ok(false);
+    };
+    state.save_scan_result(observed)?;
+    Ok(true)
+}
+
+/// Called once after the window has rendered cached state. No remote version
+/// checks or changes to font ownership take place here.
+#[tauri::command]
+async fn refresh_local_font_observation(
+    state: State<'_, AppState>,
+) -> std::result::Result<Option<UpdateStatus>, String> {
+    if state.font_scan_started.swap(true, Ordering::Relaxed) {
+        return Ok(None);
+    }
+    let repository = state.state.clone();
+    let found =
+        tauri::async_runtime::spawn_blocking(move || refresh_font_awesome_scan(&repository))
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?;
+    if !found {
+        return Ok(None);
+    }
+    commands::cached_status_for_font(&state, FONT_AWESOME_PRO)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 fn init_logging(paths: &AppPaths) -> Result<tracing_appender::non_blocking::WorkerGuard> {

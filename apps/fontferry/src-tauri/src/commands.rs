@@ -4,15 +4,14 @@ use super::*;
 pub(super) async fn dashboard(
     state: State<'_, AppState>,
 ) -> std::result::Result<Dashboard, String> {
-    state
-        .engine
-        .recover()
-        .await
-        .map_err(|error| error.to_string())?;
-    let _guard = state
-        .engine
-        .acquire_operation_lock()
-        .map_err(|e| e.to_string())?;
+    let guard = match state.engine.acquire_recovered_read().await {
+        Ok(guard) => Some(guard),
+        Err(fontferry_core::FontFerryError::OperationBusy) => None,
+        Err(error) => return Err(error.to_string()),
+    };
+    // During a live operation only read committed SQLite rows, not font files.
+    // They describe the last ledger state, not a guarantee about files in flight.
+    let operation_busy = guard.is_none();
     let installed = state
         .state
         .list_installed()
@@ -30,6 +29,7 @@ pub(super) async fn dashboard(
         installed,
         statuses,
         activities,
+        operation_busy,
         schedule_enabled: saved_schedule_state(&state.state).map_err(|e| e.to_string())?,
         update_channel: state
             .state
@@ -104,32 +104,78 @@ async fn cached_statuses(
 ) -> Result<Vec<UpdateStatus>> {
     let mut statuses = Vec::new();
     for font in state.engine.fonts() {
-        let Some(mut status) = state
-            .state
-            .get_setting::<UpdateStatus>(&status_cache_key(&font.id))?
-        else {
-            continue;
-        };
-        let observed = state.state.get_observed(&font.id).await?;
-        let current = installed
-            .iter()
-            .find(|i| i.font_id == font.id)
-            .map(|i| {
-                i.manual_version
-                    .clone()
-                    .unwrap_or_else(|| i.version.clone())
-            })
-            .or_else(|| observed.and_then(|i| i.manual_version.or(i.detected_version)));
-        status.refresh_local(
-            current,
-            matches!(
-                font.version_provider,
-                fontferry_core::VersionProvider::HttpFingerprint { .. }
-            ),
-        );
-        statuses.push(status);
+        if let Some(status) = cached_status(
+            state,
+            &font,
+            installed.iter().find(|i| i.font_id == font.id),
+        )
+        .await?
+        {
+            statuses.push(status);
+        }
     }
     Ok(statuses)
+}
+
+pub(super) async fn cached_status_for_font(
+    state: &AppState,
+    font_id: &str,
+) -> Result<Option<UpdateStatus>> {
+    let Some(font) = state
+        .engine
+        .fonts()
+        .into_iter()
+        .find(|font| font.id == font_id)
+    else {
+        return Ok(None);
+    };
+    let installed = state.state.get_installed(font_id).await?;
+    cached_status(state, &font, installed.as_ref()).await
+}
+
+async fn cached_status(
+    state: &AppState,
+    font: &FontDefinition,
+    installed: Option<&InstalledFont>,
+) -> Result<Option<UpdateStatus>> {
+    let cached = state
+        .state
+        .get_setting::<UpdateStatus>(&status_cache_key(&font.id))?;
+    let observed = if installed.is_none() {
+        state
+            .state
+            .get_observed(&font.id)
+            .await?
+            .and_then(|i| i.manual_version.or(i.detected_version))
+    } else {
+        None
+    };
+    let Some(mut status) = cached else {
+        return Ok(observed.map(|version| UpdateStatus {
+            font_id: font.id.clone(),
+            current_version: Some(version),
+            available_version: None,
+            update_available: false,
+            delivery_policy: font.delivery_policy,
+            checked_at: None,
+            from_cache: false,
+        }));
+    };
+    let current = installed
+        .map(|item| {
+            item.manual_version
+                .clone()
+                .unwrap_or_else(|| item.version.clone())
+        })
+        .or(observed);
+    status.refresh_local(
+        current,
+        matches!(
+            font.version_provider,
+            fontferry_core::VersionProvider::HttpFingerprint { .. }
+        ),
+    );
+    Ok(Some(status))
 }
 
 #[tauri::command]

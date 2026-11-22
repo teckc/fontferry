@@ -161,12 +161,14 @@ impl PlatformFontInstaller {
             .collect();
         let mut target = BTreeMap::new();
         let mut sources = BTreeMap::new();
+        let mut seen_hashes = BTreeSet::new();
+        let mut legacy_hashes = BTreeMap::new();
         for item in prepared {
             let hash = file_hash(&item.path)?;
             if hash != item.sha256 {
                 return Err(FontFerryError::FontRejected("prepared font changed".into()));
             }
-            if target.values().any(|value| *value == hash) {
+            if !seen_hashes.insert(hash.clone()) {
                 continue;
             }
             let extension = item
@@ -178,10 +180,15 @@ impl PlatformFontInstaller {
             // Full digest avoids prefix collisions; identical payloads share one managed path.
             let mut path = directory.join(format!("{}-{hash}.{extension}", font.id));
             // Reuse legacy managed names when their full content matches.
-            if let Some(existing) = old_files
-                .iter()
-                .find(|p| file_hash(p).is_ok_and(|h| h == hash))
-            {
+            // Cache only for this locked planning pass; backup and recovery
+            // independently read and verify the live files.
+            if let Some(existing) = old_files.iter().find(|p| {
+                legacy_hashes
+                    .entry((*p).clone())
+                    .or_insert_with(|| file_hash(p).ok())
+                    .as_ref()
+                    == Some(&hash)
+            }) {
                 path = existing.clone();
             }
             if fs::symlink_metadata(&path).is_ok() && !old_files.contains(&path) {

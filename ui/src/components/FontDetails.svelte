@@ -5,6 +5,7 @@
   export let selectedVariants: string[];
   export let manualVersion: string;
   export let operation: Operation | null;
+  export let fontActionsDisabled: boolean;
   export let licenseAccepted: boolean;
   export let message: string;
   export let error: string;
@@ -49,7 +50,7 @@
         <div class="variants">
           {#each selected.variants as variant}
             <label class:selected={selectedVariants.includes(variant.id)}>
-              <input type="checkbox" disabled={operation !== null} checked={selectedVariants.includes(variant.id)} onchange={() => toggleVariant(variant.id)} />
+              <input type="checkbox" disabled={operation !== null || fontActionsDisabled} checked={selectedVariants.includes(variant.id)} onchange={() => toggleVariant(variant.id)} />
               <span><strong>{variant.name}</strong><small>{variant.description}</small></span>
             </label>
           {/each}
@@ -57,21 +58,21 @@
       {/if}
       <div class="license-line"><span>许可协议：{selected.license.name}</span><a href={selected.license.url} target="_blank" rel="noreferrer">查看许可协议 ↗</a></div>
       {#if selected.license.requiresAcceptance && selected.deliveryPolicy === "autoInstall"}
-        <label class="license-consent"><input type="checkbox" bind:checked={licenseAccepted} disabled={operation !== null} /><span>我已阅读并同意此字体的许可协议</span></label>
+        <label class="license-consent"><input type="checkbox" bind:checked={licenseAccepted} disabled={operation !== null || fontActionsDisabled} /><span>我已阅读并同意此字体的许可协议</span></label>
       {/if}
       {#if selected.deliveryPolicy === "notifyOnly"}
         <div class="manual-version">
           <label>当前安装版本<input bind:value={manualVersion} placeholder="例如 7.2.0" /></label>
-          <button class="quiet" onclick={() => saveManualVersion(selected!)} disabled={operation !== null}>保存</button>
+          <button class="quiet" onclick={() => saveManualVersion(selected!)} disabled={operation !== null || fontActionsDisabled}>保存</button>
         </div>
       {/if}
       <div class="drawer-actions">
-        <button class="quiet" onclick={() => check(selected!.id)} disabled={operation !== null}>
+        <button class="quiet" onclick={() => check(selected!.id)} disabled={operation !== null || fontActionsDisabled}>
           {#if operation?.kind === "check-fonts"}<span class="button-spinner"></span>{/if}
           {operation?.kind === "check-fonts" ? "检查中…" : "检查更新"}
         </button>
         {#if selected.deliveryPolicy === "autoInstall"}
-          <button class="primary" onclick={() => install(selected!)} disabled={!selectedVariants.length || operation !== null || (selected.license.requiresAcceptance && !licenseAccepted)}>
+          <button class="primary" onclick={() => install(selected!)} disabled={!selectedVariants.length || operation !== null || fontActionsDisabled || (selected.license.requiresAcceptance && !licenseAccepted)}>
             {#if operation?.kind === "install-font"}<span class="button-spinner"></span>{/if}
             {operation?.kind === "install-font" ? "正在安装…" : installLabel}
           </button>
@@ -81,8 +82,8 @@
       </div>
       {#if current}
         <div class="danger-zone">
-          {#if current?.previous}<button disabled={operation !== null} onclick={() => rollback(selected!)}>恢复至 {current.previous.version}</button>{/if}
-          <button disabled={operation !== null} onclick={() => remove(selected!)}>卸载字渡管理的文件</button>
+          {#if current?.previous}<button disabled={operation !== null || fontActionsDisabled} onclick={() => rollback(selected!)}>恢复至 {current.previous.version}</button>{/if}
+          <button disabled={operation !== null || fontActionsDisabled} onclick={() => remove(selected!)}>卸载字渡管理的文件</button>
         </div>
       {/if}
     </div>
