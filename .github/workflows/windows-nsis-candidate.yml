@@ -26,11 +26,17 @@ jobs:
           pnpm install --frozen-lockfile
           rustup toolchain install 1.97.1 --profile minimal
       - name: Build candidate NSIS installer
-        shell: pwsh
+        shell: bash
         run: |
-          $config = Join-Path $env:RUNNER_TEMP candidate.json
-          '{"version":"0.2.0-alpha.6","bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Encoding utf8 $config
-          pnpm exec tauri build --config apps/fontferry/src-tauri/tauri.conf.json --config $config --target x86_64-pc-windows-msvc --bundles nsis -- --locked
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          for (const path of ['Cargo.toml', 'Cargo.lock', 'package.json', 'apps/fontferry/src-tauri/tauri.conf.json']) {
+            const original = readFileSync(path, 'utf8');
+            if (!original.includes('0.2.0-alpha.5')) throw new Error('Missing baseline version in ' + path);
+            writeFileSync(path, original.replaceAll('0.2.0-alpha.5', '0.2.0-alpha.6'));
+          }
+          JS
+          node node_modules/@tauri-apps/cli/tauri.js build --config apps/fontferry/src-tauri/tauri.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target x86_64-pc-windows-msvc --bundles nsis -- --locked
       - name: Record installer provenance
         shell: pwsh
         run: |
