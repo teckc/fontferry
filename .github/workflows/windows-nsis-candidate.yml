@@ -1,0 +1,129 @@
+name: Windows NSIS candidate
+on:
+  push:
+    branches: [candidate/windows-nsis-20261123]
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - name: Checkout fixes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 662fcc7f7b35bc59450652d7984977a921590b92
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+      - name: Prepare dependencies
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.9.0 --activate
+          pnpm install --frozen-lockfile
+          rustup toolchain install 1.97.1 --profile minimal
+      - name: Build candidate NSIS installer
+        shell: pwsh
+        run: |
+          $config = Join-Path $env:RUNNER_TEMP candidate.json
+          '{"version":"0.2.0-alpha.6","bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Encoding utf8 $config
+          pnpm tauri build --config apps/fontferry/src-tauri/tauri.conf.json --config $config --target x86_64-pc-windows-msvc --bundles nsis -- --locked
+      - name: Record installer provenance
+        shell: pwsh
+        run: |
+          $release = 'target/x86_64-pc-windows-msvc/release'
+          $installer = @(Get-ChildItem "$release/bundle/nsis" -Filter '*setup.exe')
+          if ($installer.Count -ne 1 -or $installer[0].Name -notmatch '0\.2\.0-alpha\.6') { throw 'Expected one alpha.6 NSIS installer' }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer[0].FullName).Hash.ToLowerInvariant()
+          $staging = Join-Path $env:RUNNER_TEMP fontferry-candidate
+          New-Item -ItemType Directory $staging | Out-Null
+          Copy-Item -LiteralPath $installer[0].FullName -Destination $staging
+          "$hash  $($installer[0].Name)" | Set-Content (Join-Path $staging SHA256SUMS)
+          git rev-parse HEAD | Set-Content (Join-Path $staging SOURCE_COMMIT)
+          "FF_INSTALLER=$($installer[0].FullName)" >> $env:GITHUB_ENV
+          "FF_BINARY_SHA=$((Get-FileHash "$release/fontferry.exe").Hash)" >> $env:GITHUB_ENV
+          Add-Content $env:GITHUB_STEP_SUMMARY "Windows candidate SHA-256: $hash"
+      - name: Upload candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: FontFerry-0.2.0-alpha.6-windows-x64-nsis
+          path: ${{ runner.temp }}/fontferry-candidate
+          retention-days: 7
+          if-no-files-found: error
+      - name: Test fresh install, upgrade and uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FontFerry'
+          $previousPath = 'HKCU:\Software\github\FontFerry'
+          $data = Join-Path $env:LOCALAPPDATA 'teckc/FontFerry/data'
+          $db = Join-Path $data fontferry.db
+          $journal = Join-Path $data font-operation.json
+          $default = Join-Path $env:LOCALAPPDATA FontFerry
+          $custom = Join-Path $env:RUNNER_TEMP 'FontFerry Upgrade Test'
+          function Run-Process([string] $path, [string] $arguments, [int] $expected = 0) {
+            $process = Start-Process -FilePath $path -ArgumentList $arguments -WindowStyle Hidden -PassThru
+            if (!$process.WaitForExit(120000)) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              throw "Process timed out: $path"
+            }
+            if ($process.ExitCode -ne $expected) { throw "$path returned $($process.ExitCode), expected $expected" }
+          }
+          function Assert-Candidate([string] $location) {
+            $program = Join-Path $location fontferry.exe
+            if ((Get-ItemPropertyValue $key DisplayVersion) -ne '0.2.0-alpha.6') { throw 'Wrong installed version' }
+            if ((Get-FileHash -LiteralPath $program).Hash -ne $env:FF_BINARY_SHA) { throw 'Installed candidate bytes differ from build' }
+            Run-Process $program doctor
+            if (!(Test-Path -LiteralPath $db)) { throw 'Missing initialized database' }
+          }
+          function Uninstall([string] $location) {
+            Run-Process (Join-Path $location uninstall.exe) '/S'
+            for ($attempt = 0; $attempt -lt 20 -and (Test-Path -LiteralPath $key); $attempt++) { Start-Sleep -Milliseconds 500 }
+            if ((Test-Path -LiteralPath $key) -or (Test-Path -LiteralPath (Join-Path $location fontferry.exe))) { throw 'Application uninstall incomplete' }
+          }
+          if ((Test-Path -LiteralPath $key) -or (Test-Path -LiteralPath $data)) { throw 'Runner state is not disposable' }
+          Run-Process $env:FF_INSTALLER '/S'
+          Assert-Candidate $default
+          Uninstall $default
+          if (!(Test-Path -LiteralPath $db)) { throw 'Application uninstall removed management data' }
+          Write-Host 'PASS: clean install, installed CLI startup and state retention on uninstall'
+
+          $baseline = Join-Path $env:RUNNER_TEMP alpha5-setup.exe
+          $release = Invoke-RestMethod 'https://api.github.com/repos/teckc/fontferry/releases/tags/v0.2.0-alpha.5'
+          $asset = @($release.assets | Where-Object name -like '*x64-setup.exe')
+          if ($asset.Count -ne 1) { throw 'Expected one official alpha.5 Windows x64 setup asset' }
+          Invoke-WebRequest -Uri $asset[0].browser_download_url -OutFile $baseline
+          $baselineHash = (Get-FileHash -LiteralPath $baseline).Hash.ToLowerInvariant()
+          if ($asset[0].digest -and $asset[0].digest -ne "sha256:$baselineHash") { throw 'Baseline installer digest mismatch' }
+          Write-Host "Official alpha.5 installer SHA-256: $baselineHash"
+          Run-Process $baseline "/S /D=$custom"
+          if ((Get-ItemPropertyValue $key DisplayVersion) -ne '0.2.0-alpha.5') { throw 'Wrong baseline installation version' }
+          $remembered = (Get-Item $previousPath).GetValue('')
+          if ($remembered -ne $custom) { throw 'Baseline custom install path was not recorded' }
+          Run-Process (Join-Path $custom fontferry.exe) doctor
+          $env:FF_TEST_DB = $db
+          python -c 'import os, sqlite3; db=sqlite3.connect(os.environ["FF_TEST_DB"]); db.execute("INSERT OR REPLACE INTO settings (key, value_json) VALUES (?, ?)", ("update-channel", chr(34)+"beta"+chr(34))); db.commit(); db.close()'
+          $backup = Join-Path $data 'backups/ci-sentinel.txt'
+          'retained backup' | Set-Content -LiteralPath $backup
+          $backupHash = (Get-FileHash -LiteralPath $backup).Hash
+
+          Run-Process $env:FF_INSTALLER '/S'
+          Assert-Candidate $custom
+          if ((Get-Item $previousPath).GetValue('') -ne $custom) { throw 'Custom location changed on upgrade' }
+          if (Test-Path -LiteralPath (Join-Path $default fontferry.exe)) { throw 'Upgrade installed a duplicate default copy' }
+          python -c 'import os, sqlite3; db=sqlite3.connect(os.environ["FF_TEST_DB"]); assert db.execute("SELECT value_json FROM settings WHERE key=?", ("update-channel",)).fetchone() == (chr(34)+"beta"+chr(34),); db.close()'
+          if ((Get-FileHash -LiteralPath $backup).Hash -ne $backupHash) { throw 'Upgrade modified the backup sentinel' }
+          Write-Host 'PASS: alpha.5 custom-path upgrade, binary identity, settings and backup retention'
+
+          Move-Item -LiteralPath $db -Destination "$db.saved"
+          '{}' | Set-Content -LiteralPath $journal
+          $journalHash = (Get-FileHash -LiteralPath $journal).Hash
+          Run-Process (Join-Path $custom fontferry.exe) doctor 1
+          if ((Test-Path -LiteralPath $db) -or (Get-FileHash -LiteralPath $journal).Hash -ne $journalHash) { throw 'Recovery guard modified missing-ledger evidence' }
+          Uninstall $custom
+          if ((Get-FileHash -LiteralPath $journal).Hash -ne $journalHash -or (Get-FileHash -LiteralPath $backup).Hash -ne $backupHash -or !(Test-Path -LiteralPath "$db.saved")) { throw 'Uninstall modified recovery evidence' }
+          Write-Host 'PASS: missing-ledger recovery guard and evidence retention on uninstall'
+          Add-Content $env:GITHUB_STEP_SUMMARY 'Passed: fresh install/CLI, alpha.5 custom-path upgrade, settings/backup retention, recovery guard and application uninstall.'
