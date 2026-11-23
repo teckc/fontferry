@@ -7,16 +7,6 @@ ignore = [
   # Tauri 2 Linux currently depends on GTK3 bindings. These advisories are
   # unmaintained notices, not known vulnerabilities; remove when Tauri moves.
   "RUSTSEC-2024-0370",
-  "RUSTSEC-2024-0411",
-  "RUSTSEC-2024-0412",
-  "RUSTSEC-2024-0413",
-  "RUSTSEC-2024-0414",
-  "RUSTSEC-2024-0415",
-  "RUSTSEC-2024-0416",
-  "RUSTSEC-2024-0417",
-  "RUSTSEC-2024-0418",
-  "RUSTSEC-2024-0419",
-  "RUSTSEC-2024-0420",
   # Transitive proc-macro/Unicode and direct ttf-parser maintenance notices.
   "RUSTSEC-2025-0075",
   "RUSTSEC-2025-0080",
