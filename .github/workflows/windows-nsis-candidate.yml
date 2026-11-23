@@ -3,62 +3,40 @@ on:
   push:
     branches: [candidate/windows-nsis-20261123]
 permissions:
+  actions: read
   contents: read
 jobs:
   candidate:
     runs-on: windows-2025
-    timeout-minutes: 35
+    timeout-minutes: 12
     steps:
-      - name: Checkout fixes
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: 662fcc7f7b35bc59450652d7984977a921590b92
-          persist-credentials: false
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: '24'
-      - name: Prepare dependencies
-        shell: bash
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.9.0 --activate
-          pnpm install --frozen-lockfile
-          rustup toolchain install 1.97.1 --profile minimal
-      - name: Build candidate NSIS installer
-        shell: bash
-        run: |
-          node --input-type=module <<'JS'
-          import { readFileSync, writeFileSync } from 'node:fs';
-          for (const path of ['Cargo.toml', 'Cargo.lock', 'package.json', 'apps/fontferry/src-tauri/tauri.conf.json']) {
-            const original = readFileSync(path, 'utf8');
-            if (!original.includes('0.2.0-alpha.5')) throw new Error('Missing baseline version in ' + path);
-            writeFileSync(path, original.replaceAll('0.2.0-alpha.5', '0.2.0-alpha.6'));
-          }
-          JS
-          node node_modules/@tauri-apps/cli/tauri.js build --config apps/fontferry/src-tauri/tauri.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' --target x86_64-pc-windows-msvc --bundles nsis -- --locked
-      - name: Record installer provenance
-        shell: pwsh
-        run: |
-          $release = 'target/x86_64-pc-windows-msvc/release'
-          $installer = @(Get-ChildItem "$release/bundle/nsis" -Filter '*setup.exe')
-          if ($installer.Count -ne 1 -or $installer[0].Name -notmatch '0\.2\.0-alpha\.6') { throw 'Expected one alpha.6 NSIS installer' }
-          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer[0].FullName).Hash.ToLowerInvariant()
-          $staging = Join-Path $env:RUNNER_TEMP fontferry-candidate
-          New-Item -ItemType Directory $staging | Out-Null
-          Copy-Item -LiteralPath $installer[0].FullName -Destination $staging
-          "$hash  $($installer[0].Name)" | Set-Content (Join-Path $staging SHA256SUMS)
-          git rev-parse HEAD | Set-Content (Join-Path $staging SOURCE_COMMIT)
-          "FF_INSTALLER=$($installer[0].FullName)" >> $env:GITHUB_ENV
-          "FF_BINARY_SHA=$((Get-FileHash "$release/fontferry.exe").Hash)" >> $env:GITHUB_ENV
-          Add-Content $env:GITHUB_STEP_SUMMARY "Windows candidate SHA-256: $hash"
-      - name: Upload candidate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - name: Download exact candidate from build run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: FontFerry-0.2.0-alpha.6-windows-x64-nsis
-          path: ${{ runner.temp }}/fontferry-candidate
-          retention-days: 7
-          if-no-files-found: error
+          path: candidate
+          run-id: 45118148469
+          github-token: ${{ github.token }}
+      - name: Verify installer and extract expected payload
+        shell: pwsh
+        run: |
+          $staging = Join-Path $env:GITHUB_WORKSPACE candidate
+          $installer = Join-Path $staging 'FontFerry_0.2.0-alpha.6_x64-setup.exe'
+          $source = (Get-Content (Join-Path $staging SOURCE_COMMIT) -Raw).Trim()
+          if ($source -ne '662fcc7f7b35bc59450652d7984977a921590b92') { throw 'Unexpected candidate source' }
+          $installerSha = (Get-FileHash -LiteralPath $installer).Hash.ToLowerInvariant()
+          if ((Get-Content (Join-Path $staging SHA256SUMS) -Raw).Trim() -ne "$installerSha  FontFerry_0.2.0-alpha.6_x64-setup.exe") { throw 'Installer checksum mismatch' }
+          $payload = Join-Path $env:RUNNER_TEMP fontferry-payload
+          $extractor = Join-Path $env:ProgramFiles '7-Zip/7z.exe'
+          & $extractor x -y "-o$payload" $installer
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot extract NSIS payload' }
+          $programs = @(Get-ChildItem $payload -Recurse -File -Filter fontferry.exe)
+          if ($programs.Count -ne 1) { throw "Expected one fontferry.exe in the installer, found $($programs.Count)" }
+          $hash = (Get-FileHash -LiteralPath $programs[0].FullName).Hash
+          "FF_INSTALLER=$installer" >> $env:GITHUB_ENV
+          "FF_BINARY_SHA=$hash" >> $env:GITHUB_ENV
+          Write-Host "Installer SHA-256: $installerSha"
+          Write-Host "Embedded fontferry.exe SHA-256: $hash"
       - name: Test fresh install, upgrade and uninstall
         shell: pwsh
         run: |
@@ -81,7 +59,8 @@ jobs:
           function Assert-Candidate([string] $location) {
             $program = Join-Path $location fontferry.exe
             if ((Get-ItemPropertyValue $key DisplayVersion) -ne '0.2.0-alpha.6') { throw 'Wrong installed version' }
-            if ((Get-FileHash -LiteralPath $program).Hash -ne $env:FF_BINARY_SHA) { throw 'Installed candidate bytes differ from build' }
+            $installedHash = (Get-FileHash -LiteralPath $program).Hash
+            if ($installedHash -ne $env:FF_BINARY_SHA) { throw "Installed binary SHA-256 $installedHash differs from NSIS payload $env:FF_BINARY_SHA" }
             Run-Process $program doctor
             if (!(Test-Path -LiteralPath $db)) { throw 'Missing initialized database' }
           }
