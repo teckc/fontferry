@@ -17,6 +17,8 @@ use url::Url;
 use crate::SqliteState;
 
 const GITHUB_API: &str = "https://api.github.com";
+const GITHUB_RELEASE_PAGE_SIZE: usize = 20;
+const MAX_GITHUB_RELEASE_PAGES: usize = 500;
 const FONT_AWESOME_RELEASES: &str = "https://api.fontawesome.com/releases";
 
 #[derive(Clone, Debug)]
@@ -216,8 +218,10 @@ impl HttpClient {
     async fn github_releases(&self, repository: &str) -> Result<Vec<Release>> {
         validate_repository(repository)?;
         let mut releases = Vec::new();
-        for page in 1..=100 {
-            let url = format!("{GITHUB_API}/repos/{repository}/releases?per_page=100&page={page}");
+        for page in 1..=MAX_GITHUB_RELEASE_PAGES {
+            let url = format!(
+                "{GITHUB_API}/repos/{repository}/releases?per_page={GITHUB_RELEASE_PAGE_SIZE}&page={page}"
+            );
             let response = self
                 .inner
                 .get(url)
@@ -229,12 +233,12 @@ impl HttpClient {
                 .error_for_status()
                 .map_err(network_error)?;
             let batch: Vec<GitHubRelease> = read_json(response).await?;
-            let done = batch.len() < 100;
+            let done = batch.len() < GITHUB_RELEASE_PAGE_SIZE;
             releases.extend(batch);
             if done {
                 break;
             }
-            if page == 100 {
+            if page == MAX_GITHUB_RELEASE_PAGES {
                 return Err(FontFerryError::Network("release pagination exceeds safety limit; refusing incomplete version selection".into()));
             }
         }

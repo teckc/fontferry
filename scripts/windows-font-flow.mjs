@@ -162,7 +162,7 @@ async function chooseSmiley() {
 }
 
 async function verifyRegistered() {
-  const registered = await ps("Add-Type -AssemblyName System.Drawing; $fonts = New-Object Drawing.Text.InstalledFontCollection; $fonts.Families | Where-Object Name -Match 'Smiley' | Select-Object -ExpandProperty Name");
+  const registered = await ps("Add-Type -AssemblyName System.Drawing; $fonts = New-Object Drawing.Text.InstalledFontCollection; $fonts.Families | ForEach-Object { $_.GetName(1033) } | Where-Object { $_ -match 'Smiley' }");
   assert.match(registered, /Smiley/i);
   console.log("GDI font selection: " + registered);
 }
