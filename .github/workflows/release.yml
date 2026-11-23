@@ -96,9 +96,8 @@ jobs:
           fi
       - name: Install Linux bundle dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf rpm
+        timeout-minutes: 8
+        run: bash scripts/install-ubuntu-build-deps.sh rpm
       - name: Build signed updater artifacts and bundles
         shell: bash
         env:
