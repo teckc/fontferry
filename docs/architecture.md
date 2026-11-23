@@ -4,7 +4,7 @@
 
 ## 现有机制
 
-GUI 与 CLI 已共用 Rust 引擎、SQLite 所有权账本与跨进程操作锁。平台适配已用日志和匹配收据约束提交后清理。当前回滚依赖本机加载的来源定义，逐字体暂停与脱离目录的本地恢复属于目标设计。新网络代理以本地分支验证为依据，发行版可用性按交付单核验。 [引擎](../crates/fontferry-core/src/engine.rs) · [安装适配](../crates/fontferry-platform/src/install.rs) · [SQLite](../crates/fontferry-platform/src/state.rs)
+GUI 与 CLI 已共用 Rust 引擎、SQLite 所有权账本与跨进程操作锁。平台适配已用日志和匹配收据约束提交后清理。当前回滚依赖本机加载的来源定义，逐字体暂停与脱离目录的本地恢复属于目标设计。alpha.7 已提供可选 GitHub 代理与分阶段安装反馈。 [引擎](../crates/fontferry-core/src/engine.rs) · [安装适配](../crates/fontferry-platform/src/install.rs) · [SQLite](../crates/fontferry-platform/src/state.rs)
 
 ## 1. 进程和职责
 

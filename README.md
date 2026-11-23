@@ -4,21 +4,21 @@
 
 ## 下载
 
-目前提供 **v0.2.0-alpha.6 测试版**。
+目前提供 **v0.2.0-alpha.7 测试版**。
 
-- [Windows x64 安装包](https://github.com/teckc/fontferry/releases/download/v0.2.0-alpha.6/FontFerry_0.2.0-alpha.6_x64-setup.exe)
-- [macOS、Linux 下载与发行说明](https://github.com/teckc/fontferry/releases/tag/v0.2.0-alpha.6)
+- [Windows x64 安装包](https://github.com/teckc/fontferry/releases/download/v0.2.0-alpha.7/FontFerry_0.2.0-alpha.7_x64-setup.exe)
+- [macOS、Linux 下载与发行说明](https://github.com/teckc/fontferry/releases/tag/v0.2.0-alpha.7)
 
 ## 快速开始
 
 1. 安装并打开 FontFerry，从「字体」页搜索一款字体，例如「得意黑」。
-2. 打开字体详情，查看来源和许可，选择字体包，再点「安装字体」。
+2. 打开字体详情，查看来源和许可，选择字体包，再点「安装字体」。核对显示的版本和文件后，点「确认安装」。
 3. 安装完成后，在需要使用字体的应用里选择该字体。如果字体列表没有刷新，重新打开目标应用。
 4. 已由 FontFerry 管理的字体可在详情里检查更新。存在上一版备份时，可恢复至该版本。
 
 ## 常见问题
 
-- **连接 GitHub 失败。** 确认当前网络能访问 GitHub，再从字体详情重试。如果能检查版本却不能安装，打开字体详情中的上游页面，确认该版本的 ZIP 能否下载。
+- **连接 GitHub 失败。** 从字体详情重试或打开网络设置。在「GitHub 网络代理」可分别测试版本查询和字体下载。正常网络留空。已有本机代理时可填其 HTTP 或混合端口，保存后重启，返回字体详情重试。
 - **应用内更新通道不可用。** 可从上面的发行页下载对应安装包。需要参与测试版更新时，可在「设置 → 程序更新」选择测试版通道。
 - **移除已安装的字体。** 在字体详情点「卸载字渡管理的文件」。此操作只针对 FontFerry 管理的文件。移除应用前，可在设置中关闭每日自动更新。
 
