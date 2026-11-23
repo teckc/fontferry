@@ -145,13 +145,14 @@ async function shown(text, scope = "body") {
 
 const drawer = '[role="dialog"]';
 
-async function openSmiley() {
+async function openFont(name) {
   const catalogOpen = await evaluate("document.querySelector('h1')?.textContent.trim() === '字体'");
   if (!catalogOpen) await click("浏览字体");
-  await until("得意黑条目", () => evaluate(
-    "(() => { const item = [...document.querySelectorAll('button')].find((button) => button.textContent.includes('得意黑')); if (!item) return false; item.click(); return true; })()",
+  await until(name + " 条目", () => evaluate(
+    "(() => { const item = [...document.querySelectorAll('button')].find((button) => button.textContent.includes(" +
+    JSON.stringify(name) + ")); if (!item) return false; item.click(); return true; })()",
   ));
-  await shown("得意黑", drawer);
+  await shown(name, drawer);
 }
 
 async function chooseSmiley() {
@@ -174,7 +175,7 @@ try {
   await execute(installer, ["/S"], { timeout: 120000 });
   const port = await listen(proxy);
   await start();
-  await openSmiley();
+  await openFont("得意黑");
   await chooseSmiley();
   await shown("安装完成", drawer);
   await verifyRegistered();
@@ -192,7 +193,7 @@ try {
   await stop();
 
   await start();
-  await openSmiley();
+  await openFont("得意黑");
   await chooseSmiley();
   await shown("下载字体失败", drawer);
   await shown("打开网络设置", drawer);
@@ -215,7 +216,7 @@ try {
   const escaped = control.replaceAll("'", "''");
   await ps("New-ItemProperty -LiteralPath '" + registry + "' -Name 'External Smiley Test' -Value '" + escaped + "' -ErrorAction Stop | Out-Null");
   const filesBefore = (await readdir(fontDirectory)).sort();
-  await openSmiley();
+  await openFont("得意黑");
   await chooseSmiley();
   await shown("系统中已有同名字体", drawer);
   assert.deepEqual(await readFile(control), bytes);
@@ -223,6 +224,21 @@ try {
   assert.equal(await ps("Get-ItemPropertyValue -LiteralPath '" + registry + "' -Name 'External Smiley Test'"), control);
   assert.equal(await evaluate("document.querySelector('[role=dialog]').textContent.includes('卸载字渡管理的文件')"), false);
   console.log("PASS A04: pre-write conflict preserved external bytes, registry entry, and ownership state");
+
+  await evaluate("document.querySelector('button[aria-label=关闭]').click()");
+  await openFont("Maple Mono");
+  for (const name of ["MapleMono-NF-CN", "MapleMono-TTF"]) {
+    assert.equal(await evaluate(
+      "(() => { const label = [...document.querySelectorAll('[role=dialog] label')].find((item) => item.querySelector('strong')?.textContent === " +
+      JSON.stringify(name) + "); if (!label) return false; label.querySelector('input').click(); return true; })()",
+    ), true, "Variant not found: " + name);
+  }
+  await click("安装字体", drawer);
+  await shown("MapleMono-TTF.zip", drawer);
+  assert.equal(await evaluate("document.querySelector('[role=dialog]').innerText.includes('MapleMono-NF-CN.zip')"), false);
+  await click("确认安装", drawer);
+  await shown("安装完成", drawer);
+  console.log("PASS A03: real installer honored the non-default Maple Mono TTF variant");
 } finally {
   try { await stop(); } finally { proxy.close(); }
 }

@@ -180,8 +180,7 @@ jobs:
         run: ./scripts/windows-product-acceptance.ps1 -BundlePath windows-bundle -Version ($env:RELEASE_TAG.Substring(1))
 
   publish:
-    name: Publish GitHub release
-    if: github.event_name != 'workflow_dispatch'
+    name: Verify bundles and publish GitHub release
     needs: [prepare, build, sbom, windows-smoke]
     permissions:
       contents: write
@@ -221,6 +220,7 @@ jobs:
             -name '*setup.exe.sig' -o -name '*.app.tar.gz.sig' -o -name '*.AppImage.sig' \
           \) -print0)
       - name: Create release
+        if: github.event_name != 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

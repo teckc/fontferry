@@ -189,9 +189,11 @@ impl FontEngine {
     }
 
     pub async fn install(&self, request: InstallRequest) -> Result<InstalledFont> {
-        self.install_with_progress(request, None, |_| {})
-            .await
-            .map(|report| report.installed)
+        let report = self.install_with_progress(request, None, |_| {}).await?;
+        if let Some(error) = report.cleanup_pending {
+            return Err(FontFerryError::RecoveryRequired(error));
+        }
+        Ok(report.installed)
     }
 
     pub async fn install_with_progress(
@@ -406,7 +408,10 @@ impl FontEngine {
             )
             .await
         {
-            Ok(value) => Ok(Some(value.installed)),
+            Ok(value) => match value.cleanup_pending {
+                Some(error) => Err(FontFerryError::RecoveryRequired(error)),
+                None => Ok(Some(value.installed)),
+            },
             Err(error) => {
                 let recovery = self.installer.recover(self.state.as_ref()).await;
                 let message = match recovery {
