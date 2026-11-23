@@ -185,8 +185,8 @@ try {
     folders[key] = join(folders.profile, "AppData", defaultName);
     await mkdir(folders[key], { recursive: true });
     const folder = folders[key].replaceAll("'", "''");
-    await ps("$ErrorActionPreference='Stop'; New-Item -Path '" + shellFolders + "' -Force | Out-Null; New-ItemProperty -LiteralPath '" +
-      shellFolders + "' -Name '" + value + "' -Value '" + folder + "' -PropertyType ExpandString -Force | Out-Null");
+    await ps("$ErrorActionPreference='Stop'; $key='" + shellFolders + "'; if (!(Test-Path -LiteralPath $key)) { New-Item -Path $key -Force | Out-Null }; " +
+      "New-ItemProperty -LiteralPath $key -Name '" + value + "' -Value '" + folder + "' -PropertyType ExpandString -Force | Out-Null");
   }
   process.env.USERPROFILE = folders.profile;
   process.env.LOCALAPPDATA = folders.local;
