@@ -30,7 +30,7 @@ jobs:
         run: |
           $config = Join-Path $env:RUNNER_TEMP candidate.json
           '{"version":"0.2.0-alpha.6","bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Encoding utf8 $config
-          pnpm tauri build --config apps/fontferry/src-tauri/tauri.conf.json --config $config --target x86_64-pc-windows-msvc --bundles nsis -- --locked
+          pnpm exec tauri build --config apps/fontferry/src-tauri/tauri.conf.json --config $config --target x86_64-pc-windows-msvc --bundles nsis -- --locked
       - name: Record installer provenance
         shell: pwsh
         run: |
@@ -87,6 +87,21 @@ jobs:
           if ((Test-Path -LiteralPath $key) -or (Test-Path -LiteralPath $data)) { throw 'Runner state is not disposable' }
           Run-Process $env:FF_INSTALLER '/S'
           Assert-Candidate $default
+          $app = Start-Process -FilePath (Join-Path $default fontferry.exe) -PassThru
+          try {
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              $app.Refresh()
+              if ($app.HasExited) { throw "Desktop app exited during startup with $($app.ExitCode)" }
+              if ($app.MainWindowTitle -eq 'FontFerry') { break }
+              Start-Sleep -Milliseconds 500
+            }
+            if ($app.MainWindowTitle -ne 'FontFerry') { throw 'Desktop window never appeared' }
+            Write-Host 'PASS: installed desktop window opened'
+          } finally {
+            if (!$app.HasExited) {
+              if (!$app.CloseMainWindow() -or !$app.WaitForExit(10000)) { Stop-Process -Id $app.Id -Force }
+            }
+          }
           Uninstall $default
           if (!(Test-Path -LiteralPath $db)) { throw 'Application uninstall removed management data' }
           Write-Host 'PASS: clean install, installed CLI startup and state retention on uninstall'
