@@ -178,6 +178,16 @@ try {
   // Start-Process can inherit the launching user's environment despite a different token.
   const folders = JSON.parse(await ps("$create = [Environment+SpecialFolderOption]::Create; @{ profile = [Environment]::GetFolderPath('UserProfile', $create); local = [Environment]::GetFolderPath('LocalApplicationData', $create); roaming = [Environment]::GetFolderPath('ApplicationData', $create) } | ConvertTo-Json -Compress"));
   assert.equal(basename(folders.profile).toLowerCase(), process.argv[3].toLowerCase());
+  // The freshly created CI account has never initialized Explorer's shell folders.
+  const shellFolders = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders";
+  for (const [key, value, defaultName] of [["local", "Local AppData", "Local"], ["roaming", "AppData", "Roaming"]]) {
+    if (folders[key]) continue;
+    folders[key] = join(folders.profile, "AppData", defaultName);
+    await mkdir(folders[key], { recursive: true });
+    const folder = folders[key].replaceAll("'", "''");
+    await ps("$ErrorActionPreference='Stop'; New-Item -Path '" + shellFolders + "' -Force | Out-Null; New-ItemProperty -LiteralPath '" +
+      shellFolders + "' -Name '" + value + "' -Value '" + folder + "' -PropertyType ExpandString -Force | Out-Null");
+  }
   process.env.USERPROFILE = folders.profile;
   process.env.LOCALAPPDATA = folders.local;
   process.env.APPDATA = folders.roaming;
@@ -186,7 +196,7 @@ try {
   process.env.TMP = process.env.TEMP;
   await mkdir(process.env.TEMP, { recursive: true });
   console.log("Verified standard-user Windows profile");
-  await execute(installer, ["/S"], { timeout: 120000 });
+  await execute(installer, ["/S", "/D=" + join(folders.local, "FontFerry")], { timeout: 120000 });
   const port = await listen(proxy);
   await start();
   await openFont("得意黑");
