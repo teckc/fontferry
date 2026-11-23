@@ -7,6 +7,10 @@ on:
         description: GitHub Actions run ID containing the signed Windows bundle
         required: true
         type: string
+      upgrade_with_owned_font:
+        description: Verify upgrade from alpha.6 while a real managed font is installed
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -28,6 +32,8 @@ jobs:
           run-id: ${{ inputs.bundle_run }}
       - name: Exercise the installed app as a standard Windows user
         shell: pwsh
+        env:
+          VERIFY_UPGRADE: ${{ inputs.upgrade_with_owned_font }}
         run: |
           $version = (Get-Content apps/fontferry/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          ./scripts/windows-product-acceptance.ps1 -BundlePath windows-bundle -Version $version
+          ./scripts/windows-product-acceptance.ps1 -BundlePath windows-bundle -Version $version -VerifyUpgrade:($env:VERIFY_UPGRADE -eq 'true')

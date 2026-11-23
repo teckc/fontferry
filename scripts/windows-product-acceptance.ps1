@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)] [string] $BundlePath,
-    [Parameter(Mandatory)] [string] $Version
+    [Parameter(Mandatory)] [string] $Version,
+    [switch] $VerifyUpgrade
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,6 +16,14 @@ $null = New-Item -ItemType Directory -Path $stage
 Copy-Item -LiteralPath $installer[0].FullName -Destination (Join-Path $stage 'candidate.exe')
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'windows-font-flow.mjs') -Destination $stage
 $node = (Get-Command node.exe -ErrorAction Stop).Source
+$baseline = $null
+if ($VerifyUpgrade) {
+    $baseline = Join-Path $stage 'alpha6-setup.exe'
+    Invoke-WebRequest 'https://github.com/teckc/fontferry/releases/download/v0.2.0-alpha.6/FontFerry_0.2.0-alpha.6_x64-setup.exe' -OutFile $baseline
+    if ((Get-FileHash -LiteralPath $baseline).Hash -ne 'b52f6946a8365f6420f1eaa3877a847f7b4798b357b8b7af679354e5a66c1414') {
+        throw 'Unexpected official alpha.6 installer digest'
+    }
+}
 $username = 'ff-' + (Get-Random -Minimum 100000 -Maximum 999999)
 $password = ConvertTo-SecureString ([guid]::NewGuid().ToString() + '!Aa1') -AsPlainText -Force
 $credential = [pscredential]::new("$env:COMPUTERNAME\$username", $password)
@@ -27,7 +36,9 @@ try {
     $candidate = Join-Path $stage 'candidate.exe'
     $stdout = Join-Path $env:RUNNER_TEMP 'fontferry-native-stdout.txt'
     $stderr = Join-Path $env:RUNNER_TEMP 'fontferry-native-stderr.txt'
-    $process = Start-Process -FilePath $node -ArgumentList "`"$script`" `"$candidate`" $username" `
+    $arguments = "`"$script`" `"$candidate`" $username"
+    if ($baseline) { $arguments += " `"$baseline`"" }
+    $process = Start-Process -FilePath $node -ArgumentList $arguments `
         -Credential $credential -LoadUserProfile -WorkingDirectory $stage `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr -WindowStyle Hidden -PassThru
     if (!$process.WaitForExit(720000)) {

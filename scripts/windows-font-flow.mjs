@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 
 const execute = promisify(execFile);
 const installer = process.argv[2];
+const baseline = process.argv[4];
 const powershell = process.env.WINDIR + "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
 
 async function ps(command) {
@@ -170,6 +171,46 @@ async function verifyRegistered() {
   console.log("GDI font selection: " + registered);
 }
 
+async function verifyUpgrade(location) {
+  await execute(baseline, ["/S", "/D=" + location], { timeout: 120000 });
+  await start();
+  await openCatalog();
+  await openFont("得意黑");
+  await click("安装字体", drawer);
+  await shown("安装完成", drawer);
+  const fontVersion = await evaluate("document.querySelector('[role=dialog] .detail-grid strong').textContent");
+  await verifyRegistered();
+  const directory = join(process.env.LOCALAPPDATA, "Microsoft", "Windows", "Fonts");
+  const files = (await readdir(directory)).filter((name) => /^smiley-sans-.+\.(ttf|otf)$/i.test(name));
+  assert.ok(files.length);
+  const originalBytes = await Promise.all(files.map((file) => readFile(join(directory, file))));
+  await stop();
+  await execute(installer, ["/S"], { timeout: 120000 });
+  const version = await ps("Get-ItemPropertyValue -LiteralPath 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\FontFerry' -Name DisplayVersion");
+  assert.equal(version, "0.2.0-alpha.7");
+  await start();
+  await openCatalog();
+  await openFont("得意黑");
+  await shown("卸载字渡管理的文件", drawer);
+  assert.equal(await evaluate("document.querySelector('[role=dialog] .detail-grid strong').textContent"), fontVersion);
+  await verifyRegistered();
+  assert.deepEqual(await Promise.all(files.map((file) => readFile(join(directory, file)))), originalBytes);
+  console.log("PASS R01 owned font: alpha.6 -> alpha.7 preserved GDI selection, ownership, version, and font bytes");
+}
+
+async function openCatalog() {
+  await until("字体目录", () => evaluate(
+    "(() => { const item = [...document.querySelectorAll('nav button')].find((button) => button.textContent.includes('字体') && !button.textContent.includes('添加')); if (!item) return false; item.click(); return true; })()",
+  ));
+}
+
+async function verifyFirstUse(location) {
+  await execute(installer, ["/S", "/D=" + location], { timeout: 120000 });
+  const port = await listen(proxy);
+  await start();
+  await firstInstallCases(port);
+}
+
 try {
   assert.ok(installer);
   assert.match(await ps("[Security.Principal.WindowsIdentity]::GetCurrent().Name"), new RegExp("\\\\" + process.argv[3] + "$", "i"));
@@ -196,9 +237,14 @@ try {
   process.env.TMP = process.env.TEMP;
   await mkdir(process.env.TEMP, { recursive: true });
   console.log("Verified standard-user Windows profile");
-  await execute(installer, ["/S", "/D=" + join(folders.local, "FontFerry")], { timeout: 120000 });
-  const port = await listen(proxy);
-  await start();
+  const location = join(folders.local, "FontFerry");
+  if (baseline) await verifyUpgrade(location);
+  else await verifyFirstUse(location);
+} finally {
+  try { await stop(); } finally { proxy.close(); }
+}
+
+async function firstInstallCases(port) {
   await openFont("得意黑");
   await chooseSmiley();
   await shown("安装完成", drawer);
@@ -263,6 +309,4 @@ try {
   await click("确认安装", drawer);
   await shown("安装完成", drawer);
   console.log("PASS A03: real installer honored the non-default Maple Mono TTF variant");
-} finally {
-  try { await stop(); } finally { proxy.close(); }
 }
