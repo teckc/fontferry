@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { connect } from "node:net";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { promisify } from "node:util";
 
@@ -98,7 +98,10 @@ async function start() {
     env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=" + port },
     stdio: "ignore",
   });
+  let launchError;
+  app.once("error", (error) => { launchError = error; });
   const url = await until("FontFerry WebView2", async () => {
+    if (launchError) throw launchError;
     if (app.exitCode !== null) throw new Error("FontFerry exited: " + app.exitCode);
     try {
       const pages = await (await fetch("http://127.0.0.1:" + port + "/json/list")).json();
@@ -172,6 +175,17 @@ try {
   assert.match(await ps("[Security.Principal.WindowsIdentity]::GetCurrent().Name"), new RegExp("\\\\" + process.argv[3] + "$", "i"));
   const administrator = await ps("$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()); $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)");
   assert.equal(administrator, "False", "Native product smoke must run as a standard user");
+  // Start-Process can inherit the launching user's environment despite a different token.
+  const folders = JSON.parse(await ps("$create = [Environment+SpecialFolderOption]::Create; @{ profile = [Environment]::GetFolderPath('UserProfile', $create); local = [Environment]::GetFolderPath('LocalApplicationData', $create); roaming = [Environment]::GetFolderPath('ApplicationData', $create) } | ConvertTo-Json -Compress"));
+  assert.equal(basename(folders.profile).toLowerCase(), process.argv[3].toLowerCase());
+  process.env.USERPROFILE = folders.profile;
+  process.env.LOCALAPPDATA = folders.local;
+  process.env.APPDATA = folders.roaming;
+  process.env.USERNAME = process.argv[3];
+  process.env.TEMP = join(folders.local, "Temp");
+  process.env.TMP = process.env.TEMP;
+  await mkdir(process.env.TEMP, { recursive: true });
+  console.log("Verified standard-user Windows profile");
   await execute(installer, ["/S"], { timeout: 120000 });
   const port = await listen(proxy);
   await start();
