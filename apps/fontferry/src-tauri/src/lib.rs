@@ -2,18 +2,18 @@ mod cli;
 mod commands;
 use cli::{Cli, run_cli};
 
-use std::{fs, sync::Arc};
+use std::{fs, num::NonZeroU16, sync::Arc};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use fontferry_core::{
-    DeliveryPolicy, FontDefinition, FontEngine, InstallRequest, InstalledFont, StateRepository,
-    UpdateStatus,
+    DeliveryPolicy, FontDefinition, FontEngine, FontFerryError, InstallCandidate, InstallReport,
+    InstallRequest, InstallStage, InstalledFont, StateRepository, UpdateStatus,
 };
 use fontferry_platform::{
     AppPaths, CachedReleaseSource, CatalogVerifier, HttpClient, PlatformFontInstaller,
-    SafeFontPreparer, SqliteState, load_embedded_or_cached, refresh_signed_catalog,
-    saved_schedule_state, scan_font_awesome, update_daily_schedule,
+    SafeFontPreparer, SqliteState, load_embedded_or_cached, local_proxy_url,
+    refresh_signed_catalog, saved_schedule_state, scan_font_awesome, update_daily_schedule,
 };
 use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
@@ -28,11 +28,13 @@ const REMOTE_CATALOG: &str =
     "https://raw.githubusercontent.com/teckc/fontferry/catalog/catalog.json";
 const REMOTE_CATALOG_SIGNATURE: &str =
     "https://raw.githubusercontent.com/teckc/fontferry/catalog/catalog.json.sig";
+const GITHUB_PROXY_PORT_SETTING: &str = "github-proxy-port";
 
 pub struct AppState {
     engine: Arc<FontEngine>,
     state: Arc<SqliteState>,
     http: Arc<HttpClient>,
+    github_proxy_url: Option<Url>,
     paths: AppPaths,
     _log_guard: tracing_appender::non_blocking::WorkerGuard,
 }
@@ -55,6 +57,7 @@ struct Dashboard {
     activities: Vec<fontferry_core::Activity>,
     schedule_enabled: Option<bool>,
     update_channel: String,
+    github_proxy_port: Option<NonZeroU16>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -64,6 +67,36 @@ struct InstallInput {
     version: Option<String>,
     variant_ids: Vec<String>,
     accept_license: bool,
+    candidate: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallFailure {
+    kind: &'static str,
+    message: String,
+}
+
+impl From<FontFerryError> for InstallFailure {
+    fn from(error: FontFerryError) -> Self {
+        let kind = match error {
+            FontFerryError::CandidateChanged => "candidateChanged",
+            FontFerryError::RecoveryRequired(_) => "recovery",
+            FontFerryError::Network(_) => "network",
+            _ => "other",
+        };
+        Self {
+            kind,
+            message: error.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkProbe {
+    releases_error: Option<String>,
+    download_error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -83,7 +116,7 @@ struct AppUpdate {
 #[serde(rename_all = "camelCase")]
 struct UpdateCheckResult {
     statuses: Vec<UpdateStatus>,
-    failures: usize,
+    failures: Vec<String>,
 }
 
 pub fn run() -> Result<()> {
@@ -113,6 +146,7 @@ fn run_gui() -> Result<()> {
             commands::dashboard,
             commands::check_font,
             commands::check_updates,
+            commands::prepare_font_install,
             commands::install_font,
             commands::uninstall_font,
             commands::rollback_font,
@@ -120,6 +154,8 @@ fn run_gui() -> Result<()> {
             commands::set_schedule,
             commands::set_manual_version,
             commands::set_update_channel,
+            commands::set_github_proxy_port,
+            commands::probe_github_network,
             commands::check_app_update,
             commands::install_app_update,
             commands::refresh_catalog
@@ -153,7 +189,10 @@ fn create_state() -> Result<AppState> {
         }
         fonts.push(source);
     }
-    let http = Arc::new(HttpClient::new()?);
+    let github_proxy_port = state
+        .get_setting::<Option<NonZeroU16>>(GITHUB_PROXY_PORT_SETTING)?
+        .flatten();
+    let http = Arc::new(HttpClient::with_github_proxy(github_proxy_port)?);
     let releases = Arc::new(CachedReleaseSource::new((*http).clone(), state.clone()));
     let engine = Arc::new(
         FontEngine::new(
@@ -171,6 +210,7 @@ fn create_state() -> Result<AppState> {
         engine,
         state,
         http,
+        github_proxy_url: github_proxy_port.map(local_proxy_url).transpose()?,
         paths,
         _log_guard: log_guard,
     })

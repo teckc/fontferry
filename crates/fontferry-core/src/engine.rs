@@ -8,8 +8,9 @@ use uuid::Uuid;
 
 use crate::{
     Activity, ActivityLevel, ArtifactSource, DeliveryPolicy, FontDefinition, FontFerryError,
-    FontInstaller, FontPreparer, InstalledFont, Release, ReleaseChannel, ReleaseSource, Result,
-    StateRepository, is_update_available, select_latest,
+    FontInstaller, FontPreparer, InstallCandidate, InstalledFont, Release, ReleaseChannel,
+    ReleaseSource, Result, StateRepository, candidate::install_candidate, is_update_available,
+    select_latest,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,6 +51,23 @@ pub struct InstallRequest {
     pub version: Option<String>,
     pub variant_ids: Vec<String>,
     pub accept_license: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InstallStage {
+    Check,
+    Download,
+    Verify,
+    Register,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallReport {
+    pub installed: InstalledFont,
+    pub families: Vec<String>,
+    pub cleanup_pending: Option<String>,
 }
 
 pub struct FontEngine {
@@ -152,12 +170,44 @@ impl FontEngine {
         })
     }
 
+    pub async fn prepare_install(
+        &self,
+        font_id: &str,
+        version: Option<&str>,
+        variants: &[String],
+    ) -> Result<InstallCandidate> {
+        let font = self.font(font_id)?;
+        validate_install(font, variants)?;
+        let releases = self.releases.releases(font, &font.version_provider).await?;
+        let release = requested_release(
+            &releases,
+            version,
+            release_channel(&font.version_provider),
+            &font.version_policy,
+        )?;
+        install_candidate(font, release, variants)
+    }
+
     pub async fn install(&self, request: InstallRequest) -> Result<InstalledFont> {
+        self.install_with_progress(request, None, |_| {})
+            .await
+            .map(|report| report.installed)
+    }
+
+    pub async fn install_with_progress(
+        &self,
+        request: InstallRequest,
+        candidate: Option<&str>,
+        progress: impl Fn(InstallStage) + Send + Sync,
+    ) -> Result<InstallReport> {
         let _guard = self.operation_lock.lock().await;
         let _process_guard = self.acquire_operation_lock()?;
-        self.installer.recover(self.state.as_ref()).await?;
+        self.installer
+            .recover(self.state.as_ref())
+            .await
+            .map_err(|error| FontFerryError::RecoveryRequired(error.to_string()))?;
         let font_id = request.font_id.clone();
-        let result = self.install_inner(request).await;
+        let result = self.install_inner(request, candidate, &progress).await;
         match result {
             Ok(value) => {
                 self.report_activity(
@@ -169,35 +219,49 @@ impl FontEngine {
                 Ok(value)
             }
             Err(error) => {
-                let message = match self.installer.recover(self.state.as_ref()).await {
-                    Ok(()) => error.to_string(),
-                    Err(recovery) => format!(
-                        "{error}; recovery incomplete: {recovery}; preserve journal, backups and fonts for repair; restarting alone may not resolve this"
-                    ),
+                let error = match self.installer.recover(self.state.as_ref()).await {
+                    Ok(()) => error,
+                    Err(recovery) => FontFerryError::RecoveryRequired(format!(
+                        "{error}。请保留操作日志和备份。{recovery}"
+                    )),
                 };
-                self.report_activity(Some(font_id.clone()), ActivityLevel::Error, message.clone())
+                self.report_activity(Some(font_id), ActivityLevel::Error, error.to_string())
                     .await;
-                Err(FontFerryError::State(message))
+                Err(error)
             }
         }
     }
 
-    async fn install_inner(&self, mut request: InstallRequest) -> Result<InstalledFont> {
+    async fn install_inner(
+        &self,
+        mut request: InstallRequest,
+        candidate: Option<&str>,
+        progress: &(dyn Fn(InstallStage) + Send + Sync),
+    ) -> Result<InstallReport> {
         request.variant_ids.sort();
         request.variant_ids.dedup();
         let font = self.font(&request.font_id)?.clone();
-        if (!font.variants.is_empty() && request.variant_ids.is_empty())
-            || request
-                .variant_ids
-                .iter()
-                .any(|id| !font.variants.iter().any(|v| v.id == *id))
+        validate_install(&font, &request.variant_ids)?;
+        progress(InstallStage::Check);
+        let releases = self
+            .releases
+            .releases(&font, &font.version_provider)
+            .await?;
+        let release = requested_release(
+            &releases,
+            request.version.as_deref(),
+            release_channel(&font.version_provider),
+            &font.version_policy,
+        );
+        let release = if candidate.is_some() {
+            release.map_err(|_| FontFerryError::CandidateChanged)?
+        } else {
+            release?
+        };
+        if let Some(expected) = candidate
+            && install_candidate(&font, release, &request.variant_ids)?.identity != expected
         {
-            return Err(FontFerryError::DownloadRejected(
-                "请选择有效的字体包；空选择不会安装默认项".into(),
-            ));
-        }
-        if font.delivery_policy == DeliveryPolicy::NotifyOnly {
-            return Err(FontFerryError::ReminderOnly);
+            return Err(FontFerryError::CandidateChanged);
         }
         if font.license.requires_acceptance
             && !self
@@ -213,22 +277,13 @@ impl FontEngine {
                 .await?;
         }
 
-        let releases = self
-            .releases
-            .releases(&font, &font.version_provider)
-            .await?;
-        let release = requested_release(
-            &releases,
-            request.version.as_deref(),
-            release_channel(&font.version_provider),
-            &font.version_policy,
-        )?;
         let provider = font
             .artifact_provider
             .as_ref()
             .ok_or(FontFerryError::ReminderOnly)?;
         let staging = TempDir::new_in(&self.staging_root)
             .map_err(|error| FontFerryError::State(error.to_string()))?;
+        progress(InstallStage::Download);
         let downloaded = self
             .artifacts
             .download(
@@ -239,8 +294,13 @@ impl FontEngine {
                 staging.path(),
             )
             .await?;
+        progress(InstallStage::Verify);
         let prepared = self.preparer.prepare(&downloaded, staging.path()).await?;
+        let mut families: Vec<_> = prepared.iter().map(|font| font.family.clone()).collect();
+        families.sort();
+        families.dedup();
         let previous = self.state.get_installed(&font.id).await?;
+        progress(InstallStage::Register);
         let outcome = self
             .installer
             .install(&font, &release.version, &prepared, previous.as_ref())
@@ -273,14 +333,31 @@ impl FontEngine {
         self.installer
             .commit(self.state.as_ref(), &installed.font_id, Some(&installed))
             .await?;
-        self.installer.finish(self.state.as_ref()).await?;
+        let cleanup_pending = self
+            .installer
+            .finish(self.state.as_ref())
+            .await
+            .err()
+            .map(|error| error.to_string());
+        if let Some(message) = &cleanup_pending {
+            self.report_activity(
+                Some(font.id.clone()),
+                ActivityLevel::Warning,
+                message.clone(),
+            )
+            .await;
+        }
         self.report_activity(
             Some(font.id),
             ActivityLevel::Info,
             format!("Installed {}", release.version),
         )
         .await;
-        Ok(installed)
+        Ok(InstallReport {
+            installed,
+            families,
+            cleanup_pending,
+        })
     }
 
     /// Scheduled updates read the current variant selection and version under the operation lock.
@@ -317,15 +394,19 @@ impl FontEngine {
             current.variant_ids
         };
         match self
-            .install_inner(InstallRequest {
-                font_id: font_id.into(),
-                version: status.available_version,
-                variant_ids: variants,
-                accept_license: false,
-            })
+            .install_inner(
+                InstallRequest {
+                    font_id: font_id.into(),
+                    version: status.available_version,
+                    variant_ids: variants,
+                    accept_license: false,
+                },
+                None,
+                &|_| {},
+            )
             .await
         {
-            Ok(value) => Ok(Some(value)),
+            Ok(value) => Ok(Some(value.installed)),
             Err(error) => {
                 let recovery = self.installer.recover(self.state.as_ref()).await;
                 let message = match recovery {
@@ -502,6 +583,22 @@ impl FontEngine {
     }
 }
 
+fn validate_install(font: &FontDefinition, variants: &[String]) -> Result<()> {
+    if (!font.variants.is_empty() && variants.is_empty())
+        || variants
+            .iter()
+            .any(|id| !font.variants.iter().any(|variant| variant.id == *id))
+    {
+        return Err(FontFerryError::DownloadRejected(
+            "请选择有效的字体包".into(),
+        ));
+    }
+    if font.delivery_policy == DeliveryPolicy::NotifyOnly {
+        return Err(FontFerryError::ReminderOnly);
+    }
+    Ok(())
+}
+
 fn release_channel(provider: &crate::VersionProvider) -> ReleaseChannel {
     match provider {
         crate::VersionProvider::GitHubRelease { channel, .. } => *channel,
@@ -563,12 +660,28 @@ mod tests {
                 published_at: datetime!(2026-01-01 0:00 UTC),
                 prerelease: false,
                 assets: vec![ReleaseAsset {
+                    id: Some(1),
                     name: "font.zip".into(),
                     url: "https://example.com/font.zip".into(),
                     size: 10,
                     digest: None,
                 }],
             }])
+        }
+    }
+
+    struct ReplacedAsset(AtomicUsize);
+
+    #[async_trait]
+    impl ReleaseSource for ReplacedAsset {
+        async fn releases(
+            &self,
+            font: &FontDefinition,
+            provider: &VersionProvider,
+        ) -> Result<Vec<Release>> {
+            let mut releases = StaticReleases.releases(font, provider).await?;
+            releases[0].assets[0].id = Some(self.0.fetch_add(1, Ordering::SeqCst) as u64);
+            Ok(releases)
         }
     }
 
@@ -737,6 +850,58 @@ mod tests {
             variants: Vec::new(),
             platforms: BTreeSet::from([Platform::Windows]),
         })
+    }
+
+    #[tokio::test]
+    async fn replaced_asset_is_rejected_before_download_or_platform_write()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let staging = tempfile::tempdir()?;
+        let mut definition = font(DeliveryPolicy::AutoInstall)?;
+        definition.variants.push(crate::Variant {
+            id: "regular".into(),
+            name: "Regular".into(),
+            description: String::new(),
+            asset_pattern: r"^font\.zip$".into(),
+            default: true,
+        });
+        let state = Arc::new(FailingState::default());
+        let engine = FontEngine::new(
+            vec![definition],
+            Arc::new(ReplacedAsset(AtomicUsize::new(1))),
+            Arc::new(EmptyArtifact),
+            Arc::new(PreparedArtifact),
+            Arc::new(TrackingInstaller {
+                uninstall_count: Arc::new(AtomicUsize::new(0)),
+            }),
+            state.clone(),
+            staging.path().to_path_buf(),
+        );
+        let variants = vec!["regular".into()];
+        let candidate = engine.prepare_install("test-font", None, &variants).await?;
+        let progress = std::sync::Mutex::new(Vec::new());
+        let result = engine
+            .install_with_progress(
+                InstallRequest {
+                    font_id: "test-font".into(),
+                    version: Some(candidate.version),
+                    variant_ids: variants,
+                    accept_license: false,
+                },
+                Some(&candidate.identity),
+                |stage| {
+                    if let Ok(mut stages) = progress.lock() {
+                        stages.push(stage);
+                    }
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(FontFerryError::CandidateChanged)));
+        assert!(matches!(
+            progress.into_inner()?.as_slice(),
+            [InstallStage::Check]
+        ));
+        assert!(state.get_installed("test-font").await?.is_none());
+        Ok(())
     }
 
     #[tokio::test]

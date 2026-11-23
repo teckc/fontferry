@@ -1,10 +1,14 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { Channel, invoke } from "@tauri-apps/api/core";
   import { onMount } from "svelte";
   import type {
     Dashboard,
     FontDefinition,
+    InstallCandidate,
+    InstallReport,
+    InstallStage,
     InstalledFont,
+    NetworkProbe,
     UpdateStatus,
   } from "./types";
 
@@ -26,6 +30,9 @@
   let sortOrder = "name";
   let licenseAccepted = false;
   let selectedVariants: string[] = [];
+  let candidate: InstallCandidate | null = null;
+  let installFailureKind = "";
+  let failedChecks: string[] = [];
   let scheduleEnabled = false;
   let sourceKind = "github";
   let sourceId = "";
@@ -37,6 +44,10 @@
   let updateChannel = "stable";
   let channelLoaded = false;
   let savingChannel = false;
+  let githubProxyPort: number | undefined;
+  let savingProxy = false;
+  let networkProbe: NetworkProbe | null = null;
+  let returnFontId: string | null = null;
   let appUpdateAvailable = false;
   let theme: Theme = "system";
   let operation: Operation | null = null;
@@ -53,7 +64,15 @@
     const savedTheme = localStorage.getItem("fontferry-theme");
     if (savedTheme === "light" || savedTheme === "dark") theme = savedTheme;
     applyTheme();
-    void load();
+    void load().then(() => {
+      const id = localStorage.getItem("fontferry-retry-font");
+      localStorage.removeItem("fontferry-retry-font");
+      const font = data.fonts.find((item) => item.id === id);
+      if (font) {
+        page = "catalog";
+        openFont(font);
+      }
+    });
   });
 
   function applyTheme() {
@@ -87,12 +106,61 @@
     }
   }
 
+  async function saveGithubProxy(event: SubmitEvent) {
+    event.preventDefault();
+    if (savingProxy || operation) return;
+    const port = githubProxyPort ?? null;
+    savingProxy = true;
+    error = "";
+    message = "";
+    try {
+      await invoke("set_github_proxy_port", { port });
+      data.githubProxyPort = port;
+      if (returnFontId) localStorage.setItem("fontferry-retry-font", returnFontId);
+      message = "代理设置已保存，重启字渡后生效。";
+    } catch (cause) {
+      error = String(cause);
+    } finally {
+      savingProxy = false;
+    }
+  }
+
+  async function testGithubNetwork() {
+    if (operation || savingProxy) return;
+    error = "";
+    operation = { kind: "check-network", title: "正在测试 GitHub 连接", detail: "分别测试版本查询和字体下载。" };
+    networkProbe = null;
+    try {
+      networkProbe = await invoke<NetworkProbe>("probe_github_network", { port: githubProxyPort ?? null });
+    } catch (cause) {
+      error = String(cause);
+    } finally {
+      operation = null;
+    }
+  }
+
+  function configureNetwork(fontId: string) {
+    returnFontId = fontId;
+    selected = null;
+    page = "settings";
+    error = "";
+    message = "";
+  }
+
+  function returnToFont() {
+    const font = data.fonts.find((font) => font.id === returnFontId);
+    returnFontId = null;
+    page = "catalog";
+    if (font) openFont(font);
+  }
+
   async function load() {
     loading = true;
     error = "";
     try {
       data = await invoke<Dashboard>("dashboard");
       scheduleEnabled = data.scheduleEnabled ?? false;
+      githubProxyPort = data.githubProxyPort ?? undefined;
       if (!channelLoaded) {
         updateChannel = data.updateChannel === "beta" ? "beta" : "stable";
         channelLoaded = true;
@@ -114,6 +182,8 @@
 
   function openFont(font: FontDefinition) {
     selected = font;
+    candidate = null;
+    installFailureKind = "";
     licenseAccepted = false;
     const savedVariants = installed(font.id)?.variantIds;
     selectedVariants = savedVariants?.length ? savedVariants.slice() : font.variants.filter((variant) => variant.default).map((variant) => variant.id);
@@ -123,6 +193,7 @@
   }
 
   function toggleVariant(id: string) {
+    candidate = null;
     selectedVariants = selectedVariants.includes(id)
       ? selectedVariants.filter((item) => item !== id)
       : [...selectedVariants, id];
@@ -137,12 +208,17 @@
     };
     error = "";
     message = "";
+    candidate = null;
+    installFailureKind = "";
     try {
       const result = await invoke<UpdateStatus>("check_font", { fontId });
       data.statuses = [...data.statuses.filter((item) => item.fontId !== fontId), result];
+      failedChecks = failedChecks.filter((id) => id !== fontId);
       message = result.updateAvailable ? `发现 ${result.availableVersion}` : "未发现可确认的新版本";
     } catch (cause) {
-      error = String(cause);
+      failedChecks = [...failedChecks.filter((id) => id !== fontId), fontId];
+      data.statuses = data.statuses.map((item) => item.fontId === fontId ? { ...item, fromCache: true } : item);
+      installError(cause, "检查版本");
     } finally {
       operation = null;
     }
@@ -158,16 +234,19 @@
     error = "";
     message = "";
     try {
-      const result = await invoke<{ statuses: UpdateStatus[]; failures: number }>(
+      const result = await invoke<{ statuses: UpdateStatus[]; failures: string[] }>(
         "check_updates",
       );
       const refreshedIds = new Set(result.statuses.map((item) => item.fontId));
+      const failedIds = new Set(result.failures);
+      failedChecks = [...failedIds];
       data.statuses = [
-        ...data.statuses.filter((item) => !refreshedIds.has(item.fontId)),
+        ...data.statuses.filter((item) => !refreshedIds.has(item.fontId))
+          .map((item) => failedIds.has(item.fontId) ? { ...item, fromCache: true } : item),
         ...result.statuses,
       ];
-      message = result.failures
-        ? `检查完成；${result.failures} 个来源暂时无法连接，已保留原有结果`
+      message = result.failures.length
+        ? `检查完成，${result.failures.length} 个来源检查失败：${data.fonts.filter((font) => failedIds.has(font.id)).map((font) => font.name).join("、")}`
         : "字体更新检查完成";
     } catch (cause) {
       error = String(cause);
@@ -177,28 +256,80 @@
     }
   }
 
+  const stageNames: Record<InstallStage, string> = { check: "检查版本", download: "下载字体", verify: "验证字体", register: "安装到系统" };
+
+  function installError(cause: unknown, phase: string) {
+    const failure = cause as { kind?: string; message?: string } | null;
+    installFailureKind = failure?.kind ?? "";
+    const detail = failure?.message ?? String(cause);
+    error = `${phase}失败：${detail}`;
+  }
+
+  async function previewInstall(font: FontDefinition) {
+    if (operation || (font.license.requiresAcceptance && !licenseAccepted)) return;
+    candidate = null;
+    error = "";
+    message = "";
+    installFailureKind = "";
+    operation = { kind: "check-fonts", title: "正在查找可安装版本", detail: font.name };
+    try {
+      const online = status(font.id);
+      candidate = await invoke<InstallCandidate>("prepare_font_install", {
+        fontId: font.id,
+        version: online?.fromCache ? null : online?.availableVersion ?? null,
+        variantIds: selectedVariants,
+      });
+    } catch (cause) {
+      installError(cause, "查找版本");
+    } finally {
+      operation = null;
+    }
+  }
+
   async function install(font: FontDefinition) {
     if (operation || (font.license.requiresAcceptance && !licenseAccepted)) return;
+    const approved = candidate;
+    if (!approved) return;
+    let phase = stageNames.check;
     operation = {
       kind: "install-font",
       title: `正在安装 ${font.name}`,
-      detail: "正在下载、验证并安装字体。完成前请不要关闭字渡。",
+      detail: phase,
     };
     error = "";
     message = "";
     try {
-      await invoke("install_font", {
+      const progress = new Channel<InstallStage>((stage) => {
+        phase = stageNames[stage];
+        if (operation?.kind === "install-font") operation = { ...operation, detail: phase };
+      });
+      const report = await invoke<InstallReport>("install_font", {
         input: {
           fontId: font.id,
-          version: status(font.id)?.availableVersion ?? null,
+          version: approved.version,
+          candidate: approved.identity,
           variantIds: selectedVariants,
           acceptLicense: licenseAccepted,
         },
+        progress,
       });
-      message = "安装完成";
-      await load();
+      candidate = null;
+      data.installed = [...data.installed.filter((item) => item.fontId !== font.id), report.installed];
+      data.statuses = data.statuses.filter((item) => item.fontId !== font.id);
+      if (report.cleanupPending) {
+        installFailureKind = "recovery";
+        message = `已安装 ${report.installed.version}，有待清理的文件。请保留日志和备份。`;
+        error = report.cleanupPending;
+      } else {
+        message = `安装完成：${report.installed.version} · ${report.families.join("、")}`;
+        await load();
+      }
     } catch (cause) {
-      error = String(cause);
+      installError(cause, phase);
+      if (installFailureKind !== "network") candidate = null;
+      if (installFailureKind === "candidateChanged") {
+        data.statuses = data.statuses.filter((item) => item.fontId !== font.id);
+      }
       message = "";
     } finally {
       operation = null;
@@ -495,7 +626,20 @@
               </button>
             {/if}
           {:else}
-            <div class="empty">暂时没有可用更新。点击右上角按钮可重新检查。</div>
+            <div class="empty">
+              {#if failedChecks.length}
+                有来源检查失败，暂时无法确认全部字体的状态。
+              {:else if !data.statuses.length}
+                尚未检查字体版本。
+              {:else if data.statuses.some((item) => item.fromCache)}
+                上次检查未发现可用更新。可重新检查在线状态。
+              {:else}
+                暂时没有可用更新。
+              {/if}
+              {#if !data.installed.length}
+                <button class="quiet" onclick={() => (page = "catalog")}>浏览字体</button>
+              {/if}
+            </div>
           {/each}
         </div>
       </section>
@@ -580,6 +724,25 @@
     {:else if page === "settings"}
       <section class="settings">
         <article class="panel">
+          <h2>GitHub 网络代理</h2>
+          {#if returnFontId}<button class="quiet" onclick={returnToFont} disabled={operation !== null || savingProxy}>返回字体详情</button>{/if}
+          <form class="form" onsubmit={saveGithubProxy}>
+            <label>本机 HTTP 代理端口
+              <input type="number" min="1" max="65535" step="1" placeholder="例如 7890"
+                bind:value={githubProxyPort} aria-describedby="github-proxy-help" disabled={savingProxy} />
+            </label>
+            <p id="github-proxy-help" class="muted">留空使用默认网络。填写 FlClash 等代理的 HTTP 或混合端口，保存后重启字渡。</p>
+            <button class="primary" type="submit" disabled={savingProxy || operation !== null || (githubProxyPort ?? null) === (data.githubProxyPort ?? null)}>保存代理设置</button>
+            <button class="quiet" type="button" onclick={testGithubNetwork} disabled={savingProxy || operation !== null}>测试连接</button>
+          </form>
+          {#if networkProbe}
+            <div role="status">
+              <p>版本查询：{networkProbe.releasesError ?? "可连接"}</p>
+              <p>字体下载：{networkProbe.downloadError ?? "可连接"}</p>
+            </div>
+          {/if}
+        </article>
+        <article class="panel">
           <h2>每日自动更新</h2>
           {#if data.scheduleEnabled === null}<p role="status">上次计划任务操作未完成，实际状态尚未确认。请选择目标状态并重新保存。</p>{/if}
           <label class="switch-row"><span><strong>每天自动更新已管理的字体</strong><small>自动安装字渡管理字体的可用更新；只提醒的来源不会自动安装。关闭窗口后仍会运行。</small></span><input type="checkbox" bind:checked={scheduleEnabled} /></label>
@@ -598,6 +761,7 @@
               {operation?.kind === "install-app" ? "正在下载…" : "安装更新"}
             </button>
           {/if}
+          <p><a href="https://github.com/teckc/fontferry/releases" target="_blank" rel="noreferrer">前往发行页手动下载安装包</a></p>
           <p class="muted">通过系统软件商店安装的版本，请在系统中更新。</p>
         </article>
         <article class="panel">
@@ -624,4 +788,6 @@
   </main>
 </div>
 
-<FontDetails bind:selected bind:selectedVariants bind:manualVersion bind:licenseAccepted {message} {error} {operation} installedFonts={data.installed} statuses={data.statuses} {toggleVariant} {check} {install} {remove} {rollback} {saveManualVersion} />
+<FontDetails bind:selected bind:selectedVariants bind:manualVersion bind:licenseAccepted {message} {error} {operation}
+  {candidate} {installFailureKind} {failedChecks} installedFonts={data.installed} statuses={data.statuses}
+  {toggleVariant} {check} {previewInstall} {install} {configureNetwork} {remove} {rollback} {saveManualVersion} />

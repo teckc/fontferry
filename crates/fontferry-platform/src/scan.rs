@@ -1,14 +1,11 @@
-use std::{
-    env,
-    path::{Path, PathBuf},
-};
+use std::{env, path::PathBuf};
 
 use fontferry_core::ObservedFont;
 use regex::Regex;
 use time::OffsetDateTime;
 use walkdir::WalkDir;
 
-use crate::inspect_font_file;
+use crate::{font::is_font_path, inspect_font_file};
 
 const MAX_SCANNED_FILES: usize = 50_000;
 
@@ -31,7 +28,7 @@ pub fn scan_font_awesome() -> Option<ObservedFont> {
                 break;
             }
             visited += 1;
-            if !entry.file_type().is_file() || !is_font(entry.path()) {
+            if !entry.file_type().is_file() || !is_font_path(entry.path()) {
                 continue;
             }
             let Ok(font) = inspect_font_file(entry.path()) else {
@@ -69,18 +66,7 @@ pub fn scan_font_awesome() -> Option<ObservedFont> {
     })
 }
 
-fn is_font(path: &Path) -> bool {
-    path.extension()
-        .and_then(|value| value.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "ttf" | "otf" | "ttc" | "otc"
-            )
-        })
-}
-
-fn font_directories() -> Vec<PathBuf> {
+pub(crate) fn font_directories() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
         let mut directories = Vec::new();

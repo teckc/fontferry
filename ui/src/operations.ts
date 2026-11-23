@@ -1,5 +1,6 @@
 export type OperationKind =
     | "check-fonts"
+    | "check-network"
     | "install-font"
     | "remove-font"
     | "rollback-font"

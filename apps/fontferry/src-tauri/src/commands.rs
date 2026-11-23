@@ -37,6 +37,11 @@ pub(super) async fn dashboard(
             .map_err(|e| e.to_string())?
             .filter(|channel| matches!(channel.as_str(), "stable" | "beta"))
             .unwrap_or_else(|| "stable".into()),
+        github_proxy_port: state
+            .state
+            .get_setting::<Option<NonZeroU16>>(GITHUB_PROXY_PORT_SETTING)
+            .map_err(|e| e.to_string())?
+            .flatten(),
     })
 }
 
@@ -44,13 +49,12 @@ pub(super) async fn dashboard(
 pub(super) async fn check_font(
     font_id: String,
     state: State<'_, AppState>,
-) -> std::result::Result<UpdateStatus, String> {
-    let status = state
-        .engine
-        .check_font(&font_id)
-        .await
-        .map_err(|error| error.to_string())?;
-    cache_status(&state.state, &status).map_err(|error| error.to_string())?;
+) -> std::result::Result<UpdateStatus, InstallFailure> {
+    let status = state.engine.check_font(&font_id).await?;
+    cache_status(&state.state, &status).map_err(|error| InstallFailure {
+        kind: "other",
+        message: error.to_string(),
+    })?;
     Ok(status)
 }
 
@@ -69,7 +73,7 @@ pub(super) async fn check_updates(
         .map(|font_id| state.engine.check_font(font_id));
     let results = join_all(checks).await;
     let mut statuses = Vec::new();
-    let mut failures = 0;
+    let mut failures = Vec::new();
     for (font_id, result) in font_ids.iter().zip(results) {
         match result {
             Ok(status) => {
@@ -77,7 +81,7 @@ pub(super) async fn check_updates(
                 statuses.push(status);
             }
             Err(error) => {
-                failures += 1;
+                failures.push(font_id.clone());
                 state
                     .engine
                     .record_failure(font_id, &error.to_string())
@@ -133,20 +137,41 @@ async fn cached_statuses(
 }
 
 #[tauri::command]
-pub(super) async fn install_font(
-    input: InstallInput,
+pub(super) async fn prepare_font_install(
+    font_id: String,
+    version: Option<String>,
+    variant_ids: Vec<String>,
     state: State<'_, AppState>,
-) -> std::result::Result<InstalledFont, String> {
+) -> std::result::Result<InstallCandidate, InstallFailure> {
     state
         .engine
-        .install(InstallRequest {
-            font_id: input.font_id,
-            version: input.version,
-            variant_ids: input.variant_ids,
-            accept_license: input.accept_license,
-        })
+        .prepare_install(&font_id, version.as_deref(), &variant_ids)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(Into::into)
+}
+
+#[tauri::command]
+pub(super) async fn install_font(
+    input: InstallInput,
+    progress: tauri::ipc::Channel<InstallStage>,
+    state: State<'_, AppState>,
+) -> std::result::Result<InstallReport, InstallFailure> {
+    state
+        .engine
+        .install_with_progress(
+            InstallRequest {
+                font_id: input.font_id,
+                version: input.version,
+                variant_ids: input.variant_ids,
+                accept_license: input.accept_license,
+            },
+            Some(&input.candidate),
+            |stage| {
+                let _delivery = progress.send(stage);
+            },
+        )
+        .await
+        .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -251,6 +276,29 @@ pub(super) async fn set_update_channel(
 }
 
 #[tauri::command]
+pub(super) async fn set_github_proxy_port(
+    port: Option<NonZeroU16>,
+    state: State<'_, AppState>,
+) -> std::result::Result<(), String> {
+    state
+        .state
+        .set_setting(GITHUB_PROXY_PORT_SETTING, &port)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub(super) async fn probe_github_network(
+    port: Option<NonZeroU16>,
+) -> std::result::Result<NetworkProbe, String> {
+    let client = HttpClient::with_github_proxy(port).map_err(|error| error.to_string())?;
+    let (releases, download) = client.probe_github().await;
+    Ok(NetworkProbe {
+        releases_error: releases.err().map(|error| error.to_string()),
+        download_error: download.err().map(|error| error.to_string()),
+    })
+}
+
+#[tauri::command]
 pub(super) async fn check_app_update(
     channel: String,
     app: tauri::AppHandle,
@@ -261,13 +309,8 @@ pub(super) async fn check_app_update(
         .state
         .set_setting("update-channel", &channel)
         .map_err(|error| error.to_string())?;
-    let updater = app
-        .updater_builder()
-        .endpoints(vec![endpoint])
-        .map_err(|error| error.to_string())?
-        .build()
-        .map_err(|error| error.to_string())?;
-    let update = updater.check().await.map_err(|error| error.to_string())?;
+    let updater = app_updater(&app, endpoint, state.github_proxy_url.clone())?;
+    let update = updater.check().await.map_err(app_update_error)?;
     Ok(match update {
         Some(update) => AppUpdate {
             available: true,
@@ -286,6 +329,7 @@ pub(super) async fn check_app_update(
 pub(super) async fn install_app_update(
     channel: String,
     app: tauri::AppHandle,
+    state: State<'_, AppState>,
 ) -> std::result::Result<bool, String> {
     #[cfg(target_os = "linux")]
     if std::env::var_os("APPIMAGE").is_none() {
@@ -293,13 +337,8 @@ pub(super) async fn install_app_update(
     }
 
     let endpoint = update_endpoint(&channel)?;
-    let updater = app
-        .updater_builder()
-        .endpoints(vec![endpoint])
-        .map_err(|error| error.to_string())?
-        .build()
-        .map_err(|error| error.to_string())?;
-    let Some(update) = updater.check().await.map_err(|error| error.to_string())? else {
+    let updater = app_updater(&app, endpoint, state.github_proxy_url.clone())?;
+    let Some(update) = updater.check().await.map_err(app_update_error)? else {
         return Ok(false);
     };
     update
@@ -307,6 +346,32 @@ pub(super) async fn install_app_update(
         .await
         .map_err(|error| error.to_string())?;
     Ok(true)
+}
+
+fn app_update_error(error: tauri_plugin_updater::Error) -> String {
+    use tauri_plugin_updater::Error::*;
+    match error {
+        ReleaseNotFound | Serialization(_) => "更新通道暂无可用清单，请前往发行页获取安装包".into(),
+        TargetNotFound(_) | TargetsNotFound(_) => {
+            "此更新通道暂无适用于本机的安装包，请查看发行页".into()
+        }
+        _ => error.to_string(),
+    }
+}
+
+fn app_updater(
+    app: &tauri::AppHandle,
+    endpoint: Url,
+    proxy: Option<Url>,
+) -> std::result::Result<tauri_plugin_updater::Updater, String> {
+    let mut builder = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|error| error.to_string())?;
+    if let Some(proxy) = proxy {
+        builder = builder.proxy(proxy);
+    }
+    builder.build().map_err(|error| error.to_string())
 }
 
 fn update_endpoint(channel: &str) -> std::result::Result<Url, String> {

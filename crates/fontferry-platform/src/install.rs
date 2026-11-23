@@ -26,6 +26,14 @@ trait FontSystem: std::fmt::Debug + Send + Sync {
         Ok(())
     }
     fn directory(&self) -> Result<PathBuf>;
+    #[cfg(windows)]
+    fn check_conflicts(
+        &self,
+        _prepared: &[PreparedFont],
+        _owned: &BTreeSet<PathBuf>,
+    ) -> Result<()> {
+        Ok(())
+    }
     fn copy(&self, source: &Path, target: &Path) -> Result<()> {
         copy_new(source, target)
     }
@@ -48,6 +56,37 @@ impl FontSystem for NativeFontSystem {
     }
     fn directory(&self) -> Result<PathBuf> {
         platform::install_directory()
+    }
+    #[cfg(windows)]
+    fn check_conflicts(&self, prepared: &[PreparedFont], owned: &BTreeSet<PathBuf>) -> Result<()> {
+        let mut wanted = BTreeSet::new();
+        for font in prepared {
+            wanted.extend(crate::font::windows_font_names(&font.path)?);
+        }
+        for root in crate::scan::font_directories()
+            .into_iter()
+            .filter(|root| root.is_dir())
+        {
+            for entry in walkdir::WalkDir::new(root).max_depth(1) {
+                let entry = entry.map_err(|error| FontFerryError::Platform(error.to_string()))?;
+                let path = entry.path();
+                if !entry.file_type().is_file()
+                    || !crate::font::is_font_path(path)
+                    || owned.contains(path)
+                {
+                    continue;
+                }
+                if crate::font::windows_font_names(path)
+                    .is_ok_and(|names| !names.is_disjoint(&wanted))
+                {
+                    let filename = entry.file_name().to_string_lossy();
+                    return Err(FontFerryError::FontRejected(format!(
+                        "系统中已有同名字体（{filename}）。请先在 Windows 字体设置中处理冲突，再重试"
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
     fn register(&self, paths: &[PathBuf]) -> Result<()> {
         platform::register(paths)
@@ -159,6 +198,8 @@ impl PlatformFontInstaller {
             .into_iter()
             .flat_map(|item| item.owned_files.iter().cloned())
             .collect();
+        #[cfg(windows)]
+        self.system.check_conflicts(prepared, &old_files)?;
         let mut target = BTreeMap::new();
         let mut sources = BTreeMap::new();
         for item in prepared {

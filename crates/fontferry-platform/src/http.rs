@@ -1,11 +1,11 @@
-use std::{net::IpAddr, sync::Arc, time::Duration};
+use std::{net::IpAddr, num::NonZeroU16, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use fontferry_core::{
     FontDefinition, FontFerryError, Release, ReleaseAsset, ReleaseSource, Result, VersionProvider,
 };
 use reqwest::{
-    Client,
+    Client, ClientBuilder, Proxy,
     header::{ACCEPT, ETAG, LAST_MODIFIED, USER_AGENT},
     redirect::{Attempt, Policy},
 };
@@ -66,14 +66,16 @@ impl ReleaseSource for CachedReleaseSource {
                 Ok(releases)
             }
             Err(network_error) => {
-                if let Some(cached) = self.state.get_setting::<ReleaseCacheEntry>(&key)? {
+                if let FontFerryError::Network(message) = &network_error
+                    && let Some(cached) = self.state.get_setting::<ReleaseCacheEntry>(&key)?
+                {
                     tracing::warn!(
                         font_id = %font.id,
                         checked_at = %cached.checked_at,
                         "network check failed; cached metadata retained for provenance only; freshness is unconfirmed"
                     );
                     Err(FontFerryError::Network(format!(
-                        "在线检查失败；缓存日期 {}，无法确认是否最新",
+                        "{message}；缓存日期 {}，无法确认是否最新",
                         cached.checked_at
                     )))
                 } else {
@@ -86,17 +88,15 @@ impl ReleaseSource for CachedReleaseSource {
 
 impl HttpClient {
     pub fn new() -> Result<Self> {
-        let inner = Client::builder()
-            .redirect(redirect_policy())
-            .dns_resolver(Arc::new(PublicResolver))
-            .connect_timeout(Duration::from_secs(20))
+        Self::with_github_proxy(None)
+    }
+
+    pub fn with_github_proxy(port: Option<NonZeroU16>) -> Result<Self> {
+        let inner = client_builder(port)?
             .timeout(Duration::from_secs(120))
             .build()
             .map_err(network_error)?;
-        let downloads = Client::builder()
-            .redirect(redirect_policy())
-            .dns_resolver(Arc::new(PublicResolver))
-            .connect_timeout(Duration::from_secs(20))
+        let downloads = client_builder(port)?
             .read_timeout(Duration::from_secs(90))
             .build()
             .map_err(network_error)?;
@@ -110,6 +110,66 @@ impl HttpClient {
     pub(crate) fn download_client(&self) -> &Client {
         &self.downloads
     }
+
+    pub async fn probe_github(&self) -> (Result<()>, Result<()>) {
+        const RELEASE: &str =
+            "https://api.github.com/repos/atelier-anchor/smiley-sans/releases/latest";
+        const ASSET: &str = "https://github.com/atelier-anchor/smiley-sans/releases/download/v2.0.1/smiley-sans-v2.0.1.zip";
+        async fn probe(request: reqwest::RequestBuilder) -> Result<()> {
+            request
+                .header(USER_AGENT, "FontFerry/0.2")
+                .timeout(Duration::from_secs(15))
+                .send()
+                .await
+                .map_err(network_error)?
+                .error_for_status()
+                .map_err(network_error)?;
+            Ok(())
+        }
+        tokio::join!(
+            probe(self.inner.get(RELEASE)),
+            probe(
+                self.downloads
+                    .get(ASSET)
+                    .header(reqwest::header::RANGE, "bytes=0-0")
+            ),
+        )
+    }
+}
+
+pub fn local_proxy_url(port: NonZeroU16) -> Result<Url> {
+    Url::parse(&format!("http://127.0.0.1:{port}"))
+        .map_err(|error| FontFerryError::Network(error.to_string()))
+}
+
+fn client_builder(port: Option<NonZeroU16>) -> Result<ClientBuilder> {
+    let builder = Client::builder()
+        .redirect(redirect_policy())
+        .dns_resolver(Arc::new(PublicResolver))
+        .connect_timeout(Duration::from_secs(20));
+    let Some(port) = port else {
+        return Ok(builder);
+    };
+    let proxy_url = local_proxy_url(port)?;
+    Ok(builder.proxy(Proxy::custom(move |url| {
+        github_proxy_target(url).then(|| proxy_url.clone())
+    })))
+}
+
+fn github_proxy_target(url: &Url) -> bool {
+    // CONNECT gives the proxy responsibility for DNS. Limit that to GitHub's known hosts.
+    url.scheme() == "https"
+        && url.port_or_known_default() == Some(443)
+        && matches!(
+            url.host_str(),
+            Some(
+                "api.github.com"
+                    | "github.com"
+                    | "raw.githubusercontent.com"
+                    | "release-assets.githubusercontent.com"
+                    | "objects.githubusercontent.com"
+            )
+        )
 }
 
 fn redirect_policy() -> Policy {
@@ -189,6 +249,7 @@ impl HttpClient {
                     .assets
                     .into_iter()
                     .map(|asset| ReleaseAsset {
+                        id: Some(asset.id),
                         name: asset.name,
                         url: asset.browser_download_url,
                         size: asset.size,
@@ -367,19 +428,55 @@ fn public_address(address: IpAddr) -> bool {
 
 #[derive(Debug)]
 struct PublicResolver;
+
+#[derive(Debug)]
+struct NonPublicDnsAddress;
+
+impl std::fmt::Display for NonPublicDnsAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "DNS 返回了非公网地址。若 GitHub 使用 Fake-IP，请在设置中填写本机 HTTP 代理端口",
+        )
+    }
+}
+
+impl std::error::Error for NonPublicDnsAddress {}
+
 impl reqwest::dns::Resolve for PublicResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         Box::pin(async move {
             let addresses: Vec<_> = tokio::net::lookup_host((name.as_str(), 0)).await?.collect();
-            if addresses.is_empty() || addresses.iter().any(|a| !public_address(a.ip())) {
-                return Err(std::io::Error::other("DNS returned a non-public address").into());
+            if addresses.is_empty() {
+                return Err(std::io::Error::other("DNS returned no addresses").into());
+            }
+            if addresses.iter().any(|a| !public_address(a.ip())) {
+                return Err(
+                    Box::new(NonPublicDnsAddress) as Box<dyn std::error::Error + Send + Sync>
+                );
             }
             Ok(Box::new(addresses.into_iter()) as reqwest::dns::Addrs)
         })
     }
 }
 
+pub(crate) fn non_public_dns_error(error: &reqwest::Error) -> Option<FontFerryError> {
+    let mut cause = std::error::Error::source(error);
+    while let Some(error) = cause {
+        if let Some(rejection) = error.downcast_ref::<NonPublicDnsAddress>() {
+            return Some(FontFerryError::Network(rejection.to_string()));
+        }
+        cause = error.source();
+    }
+    None
+}
+
 fn network_error(error: reqwest::Error) -> FontFerryError {
+    if let Some(rejection) = non_public_dns_error(&error) {
+        return rejection;
+    }
+    if error.is_connect() {
+        return FontFerryError::Network("无法连接服务器，请检查网络或本机代理设置".into());
+    }
     FontFerryError::Network(error.without_url().to_string())
 }
 
@@ -433,6 +530,7 @@ struct GitHubRelease {
 
 #[derive(Debug, Deserialize)]
 struct GitHubAsset {
+    id: u64,
     name: String,
     browser_download_url: String,
     size: u64,
@@ -453,6 +551,69 @@ struct FontAwesomeRelease {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn metadata_and_downloads_connect_through_the_configured_proxy()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = NonZeroU16::new(listener.local_addr()?.port()).ok_or("missing proxy port")?;
+        let client = HttpClient::with_github_proxy(Some(port))?;
+        let proxy = async {
+            for host in ["api.github.com", "release-assets.githubusercontent.com"] {
+                let (socket, _) = listener.accept().await?;
+                let mut stream = BufReader::new(socket);
+                let mut line = String::new();
+                stream.read_line(&mut line).await?;
+                assert_eq!(line, format!("CONNECT {host}:443 HTTP/1.1\r\n"));
+                loop {
+                    line.clear();
+                    if stream.read_line(&mut line).await? == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                stream
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                    .await?;
+            }
+            Ok::<_, std::io::Error>(())
+        };
+        let requests = async {
+            assert!(client.raw().get(GITHUB_API).send().await.is_err());
+            assert!(
+                client
+                    .download_client()
+                    .get("https://release-assets.githubusercontent.com/font.zip")
+                    .send()
+                    .await
+                    .is_err()
+            );
+        };
+        let (proxy_result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(proxy, requests)
+        })
+        .await?;
+        proxy_result?;
+        Ok(())
+    }
+
+    #[test]
+    fn proxy_scope_excludes_custom_hosts_and_ports() -> std::result::Result<(), url::ParseError> {
+        for url in [
+            "https://github.com.example.org",
+            "https://github.com:8443",
+            "http://github.com:443",
+            "https://localhost",
+            "https://127.0.0.1",
+        ] {
+            assert!(!github_proxy_target(&Url::parse(url)?), "{url}");
+        }
+        assert!(github_proxy_target(&Url::parse("https://github.com")?));
+        Ok(())
+    }
+
     #[test]
     fn protocol_assignment_range_is_rejected_for_literal_and_resolved_addresses()
     -> std::result::Result<(), Box<dyn std::error::Error>> {

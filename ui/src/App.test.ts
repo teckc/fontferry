@@ -4,6 +4,7 @@ import { expect, test, vi } from "vitest";
 import App from "./App.svelte";
 
 vi.mock("@tauri-apps/api/core", () => ({
+  Channel: class { constructor(public onmessage: (value: unknown) => void) {} },
   invoke: vi.fn().mockResolvedValue({
     fonts: [],
     installed: [],
@@ -25,6 +26,8 @@ import { afterEach } from "vitest";
 import catalog from "../../catalog/builtin/catalog.json";
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
+
+const preview = { version: "2.0", identity: "confirmed", assetNames: ["font.zip"] };
 
 test("restores installed variants rather than catalog defaults", async () => {
   const font = { ...catalog.fonts[0], variants: [
@@ -58,11 +61,35 @@ test("failed schedule change restores persisted checkbox state", async () => {
   expect(checkbox).not.toBeChecked();
 });
 
+test("saves an optional GitHub proxy and can restore the default network", async () => {
+  vi.mocked(invoke).mockResolvedValue({ fonts: [], installed: [], statuses: [], activities: [] });
+  render(App);
+  await waitFor(() => expect(screen.queryByText("正在读取字体状态…")).not.toBeInTheDocument());
+  await fireEvent.click(screen.getByRole("button", { name: "⚙设置" }));
+  const port = screen.getByRole("spinbutton", { name: "本机 HTTP 代理端口" });
+  const save = screen.getByRole("button", { name: "保存代理设置" });
+  expect(port).toHaveValue(null);
+  expect(save).toBeDisabled();
+
+  await fireEvent.input(port, { target: { value: "7890" } });
+  await fireEvent.click(save);
+  expect(invoke).toHaveBeenCalledWith("set_github_proxy_port", { port: 7890 });
+  expect(await screen.findByText("代理设置已保存，重启字渡后生效。")).toBeInTheDocument();
+
+  await fireEvent.input(port, { target: { value: "" } });
+  await fireEvent.click(save);
+  expect(invoke).toHaveBeenLastCalledWith("set_github_proxy_port", { port: null });
+});
+
 test("open font details refresh after installation without reopening", async () => {
   const font = catalog.fonts[0];
   let version = "1.0";
   vi.mocked(invoke).mockImplementation(async (command) => {
-    if (command === "install_font") { version = "2.0"; return undefined; }
+    if (command === "prepare_font_install") return preview;
+    if (command === "install_font") {
+      version = "2.0";
+      return { installed: { fontId: font.id, version, variantIds: [font.variants[0].id], previous: null }, families: [font.name], cleanupPending: null };
+    }
     return {
       fonts: [font],
       installed: [{ fontId: font.id, version, variantIds: [font.variants[0].id], previous: null }],
@@ -76,6 +103,7 @@ test("open font details refresh after installation without reopening", async () 
   await fireEvent.click(screen.getByRole("button", { name: new RegExp(font.name) }));
   expect(screen.getByRole("dialog")).toHaveTextContent("1.0");
   await fireEvent.click(screen.getByRole("button", { name: /安装字体|更新字体|更改字体包|重新安装/ }));
+  await fireEvent.click(await screen.findByRole("button", { name: "确认安装" }));
   await waitFor(() => expect(screen.getByRole("dialog")).not.toHaveTextContent("1.0"));
   expect(screen.getByRole("dialog")).toHaveTextContent("2.0");
 });
@@ -126,7 +154,14 @@ test("filters management status together with search and clears empty results", 
 
 test("requires real license consent and resets it when details reopen", async () => {
   const font = { ...catalog.fonts[0], license: { ...catalog.fonts[0].license, requiresAcceptance: true } };
-  vi.mocked(invoke).mockResolvedValue({ fonts: [font], installed: [], statuses: [], activities: [] });
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "prepare_font_install") return preview;
+    if (command === "install_font") return {
+      installed: { fontId: font.id, version: preview.version, variantIds: [font.variants[0].id] },
+      families: [font.name], cleanupPending: null,
+    };
+    return { fonts: [font], installed: [], statuses: [], activities: [] };
+  });
   render(App);
   await openCatalog();
   await fireEvent.click(screen.getByRole("button", { name: new RegExp(font.name) }));
@@ -138,25 +173,53 @@ test("requires real license consent and resets it when details reopen", async ()
   expect(screen.getByRole("button", { name: "安装字体" })).toBeDisabled();
   await fireEvent.click(screen.getByRole("checkbox", { name: "我已阅读并同意此字体的许可协议" }));
   await fireEvent.click(screen.getByRole("button", { name: "安装字体" }));
-  expect(invoke).toHaveBeenCalledWith("install_font", { input: expect.objectContaining({ acceptLicense: true, fontId: font.id }) });
+  await fireEvent.click(await screen.findByRole("button", { name: "确认安装" }));
+  expect(invoke).toHaveBeenCalledWith("install_font", { input: expect.objectContaining({ acceptLicense: true, fontId: font.id, candidate: preview.identity }), progress: expect.anything() });
 });
 
 test("disables removal and rollback while installation is pending", async () => {
   const font = { ...catalog.fonts[0], license: { ...catalog.fonts[0].license, requiresAcceptance: false } };
-  let finish: () => void = () => {};
-  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  const record = { fontId: font.id, version: "1", variantIds: [font.variants[0].id], previous: { version: "0.9" }, ownedFiles: ["sample.ttf"] };
+  const report = { installed: record, families: [font.name], cleanupPending: null };
+  let finish: (result: typeof report) => void = () => {};
+  const pending = new Promise<typeof report>((resolve) => { finish = resolve; });
   vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "prepare_font_install") return preview;
     if (command === "install_font") return pending;
-    return { fonts: [font], installed: [{ fontId: font.id, version: "1", variantIds: [font.variants[0].id], previous: { version: "0.9" }, ownedFiles: ["sample.ttf"] }], statuses: [], activities: [] };
+    return { fonts: [font], installed: [record], statuses: [], activities: [] };
   });
   render(App);
   await openCatalog();
   await fireEvent.click(screen.getByRole("button", { name: new RegExp(font.name) }));
   await fireEvent.click(screen.getByRole("button", { name: "重新安装" }));
+  await fireEvent.click(await screen.findByRole("button", { name: "确认安装" }));
   expect(screen.getByRole("button", { name: "恢复至 0.9" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "卸载字渡管理的文件" })).toBeDisabled();
-  finish();
+  finish(report);
   await waitFor(() => expect(screen.getByRole("button", { name: "重新安装" })).toBeEnabled());
+});
+
+test("download failure preserves confirmation and offers a route to network settings", async () => {
+  const font = catalog.fonts.find((item) => item.id === "smiley-sans")!;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "prepare_font_install") return preview;
+    if (command === "install_font") {
+      (args as { progress: { onmessage: (phase: string) => void } }).progress.onmessage("download");
+      throw { kind: "network", message: "代理未连接" };
+    }
+    return { fonts: [font], installed: [], statuses: [], activities: [] };
+  });
+  render(App);
+  await fireEvent.click(await screen.findByRole("button", { name: "浏览字体" }));
+  await fireEvent.click(screen.getByRole("button", { name: /得意黑/ }));
+  await fireEvent.click(screen.getByRole("button", { name: "安装字体" }));
+  await fireEvent.click(await screen.findByRole("button", { name: "确认安装" }));
+  expect(screen.getByRole("dialog")).toHaveTextContent("下载字体失败：代理未连接");
+  expect(screen.getByRole("button", { name: "确认安装" })).toBeEnabled();
+  await fireEvent.click(screen.getByRole("button", { name: "打开网络设置" }));
+  expect(screen.getByRole("heading", { name: "GitHub 网络代理" })).toBeInTheDocument();
+  await fireEvent.click(screen.getByRole("button", { name: "返回字体详情" }));
+  expect(screen.getByRole("dialog", { name: "得意黑" })).toBeInTheDocument();
 });
 
 test("failed removal keeps details and shows the failure in the drawer", async () => {

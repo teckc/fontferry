@@ -1,14 +1,11 @@
-use std::{
-    collections::BTreeSet,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use fontferry_core::{
-    ArtifactProvider, ArtifactSource, FontDefinition, FontFerryError, Release, ReleaseAsset, Result,
+    ArtifactProvider, ArtifactSource, FontDefinition, FontFerryError, Release, Result,
+    select_release_assets,
 };
 use futures_util::StreamExt;
-use regex::Regex;
 use reqwest::{Client, StatusCode};
 use sha2::{Digest, Sha256};
 use tokio::{fs::File, io::AsyncWriteExt};
@@ -31,7 +28,7 @@ impl ArtifactSource for HttpClient {
     ) -> Result<Vec<PathBuf>> {
         let assets = match provider {
             ArtifactProvider::GitHubAsset { repository: _ } => {
-                select_assets(font, release, variant_ids)?
+                select_release_assets(font, release, variant_ids)?
                     .into_iter()
                     .map(|asset| {
                         let url = Url::parse(&asset.url)
@@ -68,54 +65,6 @@ impl ArtifactSource for HttpClient {
     }
 }
 
-fn select_assets<'a>(
-    font: &FontDefinition,
-    release: &'a Release,
-    requested_variants: &[String],
-) -> Result<Vec<&'a ReleaseAsset>> {
-    let requested: BTreeSet<_> = requested_variants.iter().map(String::as_str).collect();
-    if requested
-        .iter()
-        .any(|id| !font.variants.iter().any(|v| v.id == *id))
-    {
-        return Err(FontFerryError::DownloadRejected(
-            "unknown variant ID".into(),
-        ));
-    }
-    let variants: Vec<_> = font
-        .variants
-        .iter()
-        .filter(|v| requested.contains(v.id.as_str()))
-        .collect();
-    if variants.is_empty() {
-        return Err(FontFerryError::DownloadRejected(
-            "no font variants were selected".into(),
-        ));
-    }
-
-    let mut selected = Vec::new();
-    for variant in variants {
-        let pattern = Regex::new(&variant.asset_pattern)
-            .map_err(|error| FontFerryError::InvalidCatalog(error.to_string()))?;
-        let matches: Vec<_> = release
-            .assets
-            .iter()
-            .filter(|asset| pattern.is_match(&asset.name))
-            .collect();
-        if matches.len() != 1 {
-            return Err(FontFerryError::DownloadRejected(format!(
-                "variant '{}' matched {} release assets; expected exactly one",
-                variant.id,
-                matches.len()
-            )));
-        }
-        selected.push(matches[0]);
-    }
-    selected.sort_by(|left, right| left.name.cmp(&right.name));
-    selected.dedup_by(|left, right| left.name == right.name);
-    Ok(selected)
-}
-
 async fn download_one(
     client: &HttpClient,
     url: &Url,
@@ -146,7 +95,9 @@ async fn download_with_retries(
         match download_attempt(client, url, filename, expected_digest, staging_directory).await {
             Ok(path) => return Ok(path),
             Err(AttemptError::Network(error)) => {
-                let retry = attempt < MAX_DOWNLOAD_ATTEMPTS && retryable(&error);
+                let dns_rejection = crate::http::non_public_dns_error(&error);
+                let retry =
+                    dns_rejection.is_none() && attempt < MAX_DOWNLOAD_ATTEMPTS && retryable(&error);
                 tracing::warn!(
                     attempt,
                     max_attempts = MAX_DOWNLOAD_ATTEMPTS,
@@ -156,7 +107,7 @@ async fn download_with_retries(
                 );
                 let _ = tokio::fs::remove_file(&partial).await;
                 if !retry {
-                    return Err(friendly_download_error(&error));
+                    return Err(dns_rejection.unwrap_or_else(|| friendly_download_error(&error)));
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
             }

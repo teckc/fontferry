@@ -53,17 +53,34 @@ const dashboard = {
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript((data) => {
+    const callbacks = new Map<number, (value: unknown) => void>();
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       value: {
-        invoke: async (command: string) => {
+        transformCallback: (callback: (value: unknown) => void) => {
+          const id = callbacks.size + 1;
+          callbacks.set(id, callback);
+          return id;
+        },
+        unregisterCallback: (id: number) => callbacks.delete(id),
+        invoke: async (command: string, args: { progress: { id: number } }) => {
           if (command === "dashboard") return data;
           if (command === "check_updates") {
             await new Promise((resolve) => setTimeout(resolve, 250));
-            return { statuses: data.statuses, failures: 0 };
+            return { statuses: data.statuses, failures: [] };
+          }
+          if (command === "prepare_font_install") {
+            return { version: "7.9", assetNames: ["MapleMono-NF-CN.zip"], identity: "approved" };
           }
           if (command === "install_font") {
+            const callback = callbacks.get(args.progress.id);
+            callback?.({ index: 0, message: "download" });
             await new Promise((resolve) => setTimeout(resolve, 250));
-            return null;
+            callback?.({ index: 1, end: true });
+            return {
+              installed: { fontId: "maple-mono", version: "7.9", variantIds: ["maplemono-nf-cn"] },
+              families: ["Maple Mono"],
+              cleanupPending: null,
+            };
           }
           throw new Error(`unexpected command: ${command}`);
         },
@@ -112,10 +129,13 @@ test("shows progress while downloading and installing a font", async ({ page }) 
 
   const dialog = page.getByRole("dialog", { name: "Maple Mono" });
   await dialog.getByRole("button", { name: /安装字体|更新字体|更改字体包|重新安装/ }).click();
+  await expect(dialog.getByText("MapleMono-NF-CN.zip")).toBeVisible();
+  await dialog.getByRole("button", { name: "确认安装" }).click();
 
   await expect(page.getByTestId("operation-status")).toContainText("正在安装 Maple Mono");
+  await expect(page.getByTestId("operation-status")).toContainText("下载字体");
   await expect(dialog.getByRole("button", { name: "正在安装…" })).toBeDisabled();
-  await expect(dialog.getByText("安装完成")).toBeVisible();
+  await expect(dialog.getByText("安装完成：7.9 · Maple Mono")).toBeVisible();
   await expect(page.getByTestId("operation-status")).toBeHidden();
 });
 

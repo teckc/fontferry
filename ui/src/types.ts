@@ -53,6 +53,25 @@ export interface UpdateStatus {
   deliveryPolicy: DeliveryPolicy;
 }
 
+export type InstallStage = "check" | "download" | "verify" | "register";
+
+export interface InstallCandidate {
+  version: string;
+  assetNames: string[];
+  identity: string;
+}
+
+export interface InstallReport {
+  installed: InstalledFont;
+  families: string[];
+  cleanupPending: string | null;
+}
+
+export interface NetworkProbe {
+  releasesError: string | null;
+  downloadError: string | null;
+}
+
 export interface Activity {
   id: string;
   fontId: string | null;
@@ -63,6 +82,7 @@ export interface Activity {
 
 export interface Dashboard {
   updateChannel?: "stable" | "beta";
+  githubProxyPort?: number | null;
   scheduleEnabled?: boolean | null;
   fonts: FontDefinition[];
   installed: InstalledFont[];

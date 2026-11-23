@@ -8,6 +8,10 @@ pub enum FontFerryError {
     UnknownFont(String),
     #[error("no eligible version is available")]
     NoEligibleVersion,
+    #[error("上游版本或下载文件已变更，请重新确认安装")]
+    CandidateChanged,
+    #[error("字体操作需要恢复：{0}")]
+    RecoveryRequired(String),
     #[error("license acceptance is required")]
     LicenseAcceptanceRequired,
     #[error("this font is reminder-only and cannot be downloaded")]

@@ -20,6 +20,8 @@ pub struct Release {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ReleaseAsset {
+    #[serde(default)]
+    pub id: Option<u64>,
     pub name: String,
     pub url: String,
     pub size: u64,

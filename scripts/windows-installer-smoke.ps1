@@ -79,13 +79,13 @@ Uninstall-Candidate $default
 if (!(Test-Path -LiteralPath $db)) { throw 'Application uninstall removed management data' }
 Write-Host 'PASS: fresh install, desktop and CLI startup, uninstall with retained ledger'
 
-$baseline = Join-Path $env:RUNNER_TEMP alpha5-setup.exe
-Invoke-WebRequest 'https://github.com/teckc/fontferry/releases/download/v0.2.0-alpha.5/FontFerry_0.2.0-alpha.5_x64-setup.exe' -OutFile $baseline
-if ((Get-FileHash -LiteralPath $baseline).Hash -ne '3a3fb8535f12cc375bb5819ff0ccd8575806ef83478e8e8c182d61ed1754e4f8') {
-    throw 'Unexpected official alpha.5 installer digest'
+$baseline = Join-Path $env:RUNNER_TEMP alpha6-setup.exe
+Invoke-WebRequest 'https://github.com/teckc/fontferry/releases/download/v0.2.0-alpha.6/FontFerry_0.2.0-alpha.6_x64-setup.exe' -OutFile $baseline
+if ((Get-FileHash -LiteralPath $baseline).Hash -ne 'b52f6946a8365f6420f1eaa3877a847f7b4798b357b8b7af679354e5a66c1414') {
+    throw 'Unexpected official alpha.6 installer digest'
 }
 Invoke-SmokeProcess $baseline "/S /D=$custom"
-if ((Get-ItemPropertyValue $key DisplayVersion) -ne '0.2.0-alpha.5' -or
+if ((Get-ItemPropertyValue $key DisplayVersion) -ne '0.2.0-alpha.6' -or
     (Get-Item $previousPath).GetValue('') -ne $custom) {
     throw 'Baseline install did not register its custom path'
 }
@@ -106,7 +106,7 @@ if ((Get-Item $previousPath).GetValue('') -ne $custom -or
 python -c 'import os, sqlite3; db=sqlite3.connect(os.environ["FF_TEST_DB"]); assert db.execute("SELECT value_json FROM settings WHERE key=?", ("update-channel",)).fetchone() == (chr(34)+"beta"+chr(34),); db.close()'
 if ($LASTEXITCODE -ne 0) { throw 'Update-channel setting did not survive upgrade' }
 if ((Get-FileHash -LiteralPath $backup).Hash -ne $backupHash) { throw 'Upgrade modified a backup' }
-Write-Host 'PASS: alpha.5 custom-path upgrade, settings and backup retention'
+Write-Host 'PASS: alpha.6 custom-path upgrade, settings and backup retention'
 
 Move-Item -LiteralPath $db -Destination "$db.saved"
 '{}' | Set-Content -LiteralPath $journal

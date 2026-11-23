@@ -1,6 +1,7 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     tags: ["v0.2.*"]
     branches: ["release/v0.2.*-alpha.*"]
@@ -27,7 +28,10 @@ jobs:
         run: |
           tag="v$(jq -er .version apps/fontferry/src-tauri/tauri.conf.json)"
           [[ "$tag" =~ ^v0\.2\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            test "$GITHUB_REF" = refs/heads/main
+            [[ "$tag" == *-alpha.* ]]
+          elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
             test "$GITHUB_REF_NAME" = "$tag"
           else
             [[ "$tag" =~ ^v0\.2\.[0-9]+-alpha\.[0-9]+$ ]]
@@ -165,9 +169,19 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: ./scripts/windows-installer-smoke.ps1 -BundlePath windows-bundle -Version ($env:RELEASE_TAG.Substring(1))
+      - name: Set up Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.1
+        with:
+          node-version: "24"
+      - name: Test real font installation and retry as a standard Windows user
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: ./scripts/windows-product-acceptance.ps1 -BundlePath windows-bundle -Version ($env:RELEASE_TAG.Substring(1))
 
   publish:
     name: Publish GitHub release
+    if: github.event_name != 'workflow_dispatch'
     needs: [prepare, build, sbom, windows-smoke]
     permissions:
       contents: write

@@ -1,10 +1,13 @@
 <script lang="ts">
-  import type { FontDefinition, InstalledFont, UpdateStatus } from "../types";
+  import type { FontDefinition, InstallCandidate, InstalledFont, UpdateStatus } from "../types";
   import type { Operation } from "../operations";
   export let selected: FontDefinition | null;
   export let selectedVariants: string[];
   export let manualVersion: string;
   export let operation: Operation | null;
+  export let candidate: InstallCandidate | null;
+  export let installFailureKind: string;
+  export let failedChecks: string[];
   export let licenseAccepted: boolean;
   export let message: string;
   export let error: string;
@@ -12,7 +15,9 @@
   export let statuses: UpdateStatus[];
   export let toggleVariant: (id: string) => void;
   export let check: (id: string) => Promise<void>;
+  export let previewInstall: (font: FontDefinition) => Promise<void>;
   export let install: (font: FontDefinition) => Promise<void>;
+  export let configureNetwork: (fontId: string) => void;
   export let remove: (font: FontDefinition) => Promise<void>;
   export let rollback: (font: FontDefinition) => Promise<void>;
   export let saveManualVersion: (font: FontDefinition) => Promise<void>;
@@ -24,18 +29,21 @@
 </script>
 
 {#if selected}
-  <div class="backdrop" role="presentation" onclick={(event) => event.target === event.currentTarget && (selected = null)}>
+  <div class="backdrop" role="presentation" onclick={(event) => !operation && event.target === event.currentTarget && (selected = null)}>
     <div class="drawer" role="dialog" aria-modal="true" aria-label={selected.name}>
-      <button class="close" aria-label="关闭" onclick={() => (selected = null)}>×</button>
+      <button class="close" aria-label="关闭" disabled={operation !== null} onclick={() => (selected = null)}>×</button>
       <p class="eyebrow">{selected.id}</p>
       <h1>{selected.name}</h1>
       <p class="lead">{selected.description}</p>
       {#if error}<div class="notice error" role="alert">{error}</div>{/if}
+      {#if error && installFailureKind === "network"}
+        <button class="quiet" onclick={() => configureNetwork(selected!.id)} disabled={operation !== null}>打开网络设置</button>
+      {/if}
       {#if message}<div class="notice success" role="status">{message}</div>{/if}
       {#if operation}<p role="status" class="muted">{operation.title}。{operation.detail}</p>{/if}
       <div class="detail-grid">
         <div><small>当前版本</small><strong>{current?.manualVersion ?? current?.version ?? update?.currentVersion ?? "尚无安装记录"}</strong></div>
-        <div><small>最新版本</small><strong>{update?.availableVersion ?? "尚未检查"}</strong></div>
+        <div><small>{update?.fromCache ? "上次查到的版本" : "可用版本"}</small><strong>{update?.availableVersion ?? (failedChecks.includes(selected.id) ? "检查失败" : update ? "无可用版本" : "尚未检查")}</strong></div>
         <div><small>更新方式</small><strong>{selected.deliveryPolicy === "autoInstall" ? "字渡可安装" : "只提醒"}</strong></div>
         <div><small>许可证</small><strong>{selected.license.spdx ?? "商业/自定义"}</strong></div>
       </div>
@@ -65,15 +73,21 @@
           <button class="quiet" onclick={() => saveManualVersion(selected!)} disabled={operation !== null}>保存</button>
         </div>
       {/if}
+      {#if candidate}
+        <div class="license-line">
+          <strong>确认安装 {candidate.version}</strong>
+          <span>{candidate.assetNames.join("、")}</span>
+        </div>
+      {/if}
       <div class="drawer-actions">
         <button class="quiet" onclick={() => check(selected!.id)} disabled={operation !== null}>
           {#if operation?.kind === "check-fonts"}<span class="button-spinner"></span>{/if}
           {operation?.kind === "check-fonts" ? "检查中…" : "检查更新"}
         </button>
         {#if selected.deliveryPolicy === "autoInstall"}
-          <button class="primary" onclick={() => install(selected!)} disabled={!selectedVariants.length || operation !== null || (selected.license.requiresAcceptance && !licenseAccepted)}>
+          <button class="primary" onclick={() => candidate ? install(selected!) : previewInstall(selected!)} disabled={!selectedVariants.length || operation !== null || installFailureKind === "recovery" || (selected.license.requiresAcceptance && !licenseAccepted)}>
             {#if operation?.kind === "install-font"}<span class="button-spinner"></span>{/if}
-            {operation?.kind === "install-font" ? "正在安装…" : installLabel}
+            {operation?.kind === "install-font" ? "正在安装…" : candidate ? "确认安装" : installLabel}
           </button>
         {:else}
           <a class="primary link" href={selected.homepage} target="_blank" rel="noreferrer">前往官方渠道</a>

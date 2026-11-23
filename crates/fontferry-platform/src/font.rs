@@ -283,7 +283,7 @@ fn validate_extracted_tree(root: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn inspect_font_file(path: &Path) -> Result<PreparedFont> {
+fn read_font_bytes(path: &Path) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     File::open(path)
         .and_then(|file| file.take(256 * 1024 * 1024 + 1).read_to_end(&mut bytes))
@@ -291,6 +291,11 @@ pub fn inspect_font_file(path: &Path) -> Result<PreparedFont> {
     if bytes.len() > 256 * 1024 * 1024 {
         return Err(FontFerryError::FontRejected("font exceeds 256 MiB".into()));
     }
+    Ok(bytes)
+}
+
+pub fn inspect_font_file(path: &Path) -> Result<PreparedFont> {
+    let bytes = read_font_bytes(path)?;
     let face = Face::parse(&bytes, 0)
         .map_err(|_| FontFerryError::FontRejected(format!("invalid font '{}'", path.display())))?;
     let name = |id| {
@@ -322,7 +327,27 @@ pub fn inspect_font_file(path: &Path) -> Result<PreparedFont> {
     })
 }
 
-fn is_font_path(path: &Path) -> bool {
+#[cfg(windows)]
+pub(crate) fn windows_font_names(path: &Path) -> Result<std::collections::BTreeSet<String>> {
+    let bytes = read_font_bytes(path)?;
+    let mut names = std::collections::BTreeSet::new();
+    for index in 0..ttf_parser::fonts_in_collection(&bytes).unwrap_or(1) {
+        let face = Face::parse(&bytes, index)
+            .map_err(|_| FontFerryError::FontRejected("无法读取字体名称".into()))?;
+        names.extend(face.names().into_iter().filter_map(|name| {
+            let kind = match name.name_id {
+                name_id::FULL_NAME => "full",
+                name_id::POST_SCRIPT_NAME => "postscript",
+                _ => return None,
+            };
+            name.to_string()
+                .map(|name| format!("{kind}:{}", name.trim().to_lowercase()))
+        }));
+    }
+    Ok(names)
+}
+
+pub(crate) fn is_font_path(path: &Path) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
         .is_some_and(|extension| {
