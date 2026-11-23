@@ -2,8 +2,10 @@ use std::{net::IpAddr, num::NonZeroU16, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use fontferry_core::{
-    FontDefinition, FontFerryError, Release, ReleaseAsset, ReleaseSource, Result, VersionProvider,
+    ArtifactProvider, FontDefinition, FontFerryError, Release, ReleaseAsset, ReleaseSource, Result,
+    VersionProvider,
 };
+use regex::Regex;
 use reqwest::{
     Client, ClientBuilder, Proxy,
     header::{ACCEPT, ETAG, LAST_MODIFIED, USER_AGENT},
@@ -190,14 +192,23 @@ fn redirect_policy() -> Policy {
 impl ReleaseSource for HttpClient {
     async fn releases(
         &self,
-        _font: &FontDefinition,
+        font: &FontDefinition,
         provider: &VersionProvider,
     ) -> Result<Vec<Release>> {
         match provider {
             VersionProvider::GitHubRelease {
                 repository,
                 channel: _,
-            } => self.github_releases(repository).await,
+            } => {
+                let mut releases = self.github_releases(repository).await?;
+                if matches!(
+                    font.artifact_provider,
+                    Some(ArtifactProvider::GitHubAsset { .. })
+                ) {
+                    retain_font_releases(font, &mut releases)?;
+                }
+                Ok(releases)
+            }
             VersionProvider::JsonEndpoint {
                 url,
                 version_pointer,
@@ -212,6 +223,24 @@ impl ReleaseSource for HttpClient {
             VersionProvider::HttpFingerprint { url } => self.fingerprint_release(url).await,
         }
     }
+}
+
+fn retain_font_releases(font: &FontDefinition, releases: &mut Vec<Release>) -> Result<()> {
+    let patterns = font
+        .variants
+        .iter()
+        .map(|variant| Regex::new(&variant.asset_pattern))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| FontFerryError::InvalidCatalog(error.to_string()))?;
+    // Some projects publish build-only assets under tags in the stable release feed.
+    // Keep ambiguous matches for candidate validation to reject explicitly.
+    releases.retain(|release| {
+        release
+            .assets
+            .iter()
+            .any(|asset| patterns.iter().any(|pattern| pattern.is_match(&asset.name)))
+    });
+    Ok(())
 }
 
 impl HttpClient {
@@ -555,6 +584,45 @@ struct FontAwesomeRelease {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn excludes_maple_mono_build_assets_without_hiding_ambiguous_font_packages()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let catalog =
+            crate::parse_catalog(include_bytes!("../../../catalog/builtin/catalog.json"))?;
+        let font = catalog
+            .fonts
+            .iter()
+            .find(|font| font.id == "maple-mono")
+            .ok_or("missing Maple Mono")?;
+        let release = |version: &str, names: &[&str]| Release {
+            version: version.to_owned(),
+            published_at: OffsetDateTime::UNIX_EPOCH,
+            prerelease: false,
+            assets: names
+                .iter()
+                .map(|name| ReleaseAsset {
+                    id: None,
+                    name: (*name).into(),
+                    url: String::new(),
+                    size: 1,
+                    digest: None,
+                })
+                .collect(),
+        };
+        let mut releases = vec![
+            release("cjk-base", &["cn-base-static.zip", "cn-base-variable.zip"]),
+            release("v7.9", &["MapleMono-TTF.zip", "MapleMono-TTF.zip"]),
+        ];
+        retain_font_releases(font, &mut releases)?;
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].version, "v7.9");
+        assert!(
+            fontferry_core::select_release_assets(font, &releases[0], &["maplemono-ttf".into()])
+                .is_err()
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn metadata_and_downloads_connect_through_the_configured_proxy()
