@@ -6,7 +6,7 @@ use std::{
 
 use async_trait::async_trait;
 use flate2::read::GzDecoder;
-use fontferry_core::{FontFerryError, FontPreparer, PreparedFont, Result};
+use fontferry_core::{DownloadedArtifact, FontFerryError, FontPreparer, PreparedFont, Result};
 use sha2::{Digest, Sha256};
 use tar::Archive;
 use ttf_parser::{Face, name_id};
@@ -23,7 +23,7 @@ pub struct SafeFontPreparer;
 impl FontPreparer for SafeFontPreparer {
     async fn prepare(
         &self,
-        downloaded: &[PathBuf],
+        downloaded: &[DownloadedArtifact],
         staging_directory: &Path,
     ) -> Result<Vec<PreparedFont>> {
         let downloaded = downloaded.to_vec();
@@ -34,11 +34,16 @@ impl FontPreparer for SafeFontPreparer {
     }
 }
 
-fn prepare_sync(downloaded: &[PathBuf], staging_directory: &Path) -> Result<Vec<PreparedFont>> {
+fn prepare_sync(
+    downloaded: &[DownloadedArtifact],
+    staging_directory: &Path,
+) -> Result<Vec<PreparedFont>> {
     let extracted = staging_directory.join("extracted");
     fs::create_dir_all(&extracted).map_err(|error| FontFerryError::State(error.to_string()))?;
     let mut budget = ExtractionBudget::new(MAX_EXTRACTED_BYTES, MAX_ARCHIVE_ENTRIES);
-    for (index, path) in downloaded.iter().enumerate() {
+    let mut prepared = Vec::new();
+    for (index, artifact) in downloaded.iter().enumerate() {
+        let path = &artifact.path;
         let destination = extracted.join(index.to_string());
         fs::create_dir_all(&destination)
             .map_err(|error| FontFerryError::State(error.to_string()))?;
@@ -68,14 +73,9 @@ fn prepare_sync(downloaded: &[PathBuf], staging_directory: &Path) -> Result<Vec<
                 path.display()
             )));
         }
-    }
-    validate_extracted_tree(&extracted)?;
-
-    let mut prepared = Vec::new();
-    for entry in WalkDir::new(&extracted).follow_links(false) {
-        let entry = entry.map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
-        if entry.file_type().is_file() && is_font_path(entry.path()) {
-            prepared.push(inspect_font_file(entry.path())?);
+        validate_extracted_tree(&destination)?;
+        for path in select_font_files(&destination, artifact)? {
+            prepared.push(inspect_font_file(&path)?);
         }
     }
     if prepared.is_empty() {
@@ -84,6 +84,34 @@ fn prepare_sync(downloaded: &[PathBuf], staging_directory: &Path) -> Result<Vec<
         ));
     }
     Ok(prepared)
+}
+
+fn select_font_files(root: &Path, artifact: &DownloadedArtifact) -> Result<Vec<PathBuf>> {
+    let mut fonts = Vec::new();
+    for entry in WalkDir::new(root).follow_links(false) {
+        let entry = entry.map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
+        if entry.file_type().is_file() && is_font_path(entry.path()) {
+            fonts.push(entry.into_path());
+        }
+    }
+    let mut selected = Vec::new();
+    for name in &artifact.required_members {
+        let matches: Vec<_> = fonts
+            .iter()
+            .filter(|path| path.file_name().and_then(|value| value.to_str()) == Some(name))
+            .collect();
+        if matches.len() != 1 {
+            return Err(FontFerryError::FontRejected(format!(
+                "归档内需要恰好一个 {name}，找到 {} 个",
+                matches.len()
+            )));
+        }
+        selected.push(matches[0].clone());
+    }
+    if artifact.include_all {
+        return Ok(fonts);
+    }
+    Ok(selected)
 }
 
 fn extract_7z(path: &Path, destination: &Path, budget: &mut ExtractionBudget) -> Result<()> {
@@ -383,6 +411,46 @@ mod tests {
             )
             .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn archive_members_are_selected_and_must_be_unique()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let root = directory.path();
+        let fonts = root.join("fonts");
+        fs::create_dir(&fonts)?;
+        for name in [
+            "WenKai-Regular.ttf",
+            "WenKaiMono-Regular.ttf",
+            "WenKaiMono-Light.ttf",
+        ] {
+            fs::write(fonts.join(name), [])?;
+        }
+        let mut artifact = DownloadedArtifact {
+            path: root.join("release.zip"),
+            required_members: vec![
+                "WenKaiMono-Regular.ttf".into(),
+                "WenKaiMono-Light.ttf".into(),
+            ],
+            include_all: false,
+        };
+        let selected = select_font_files(root, &artifact)?;
+        assert_eq!(
+            selected,
+            [
+                fonts.join("WenKaiMono-Regular.ttf"),
+                fonts.join("WenKaiMono-Light.ttf")
+            ]
+        );
+        artifact
+            .required_members
+            .push("WenKaiMono-Medium.ttf".into());
+        assert!(select_font_files(root, &artifact).is_err());
+        fs::write(root.join("WenKaiMono-Medium.ttf"), [])?;
+        fs::write(fonts.join("WenKaiMono-Medium.ttf"), [])?;
+        assert!(select_font_files(root, &artifact).is_err());
         Ok(())
     }
 

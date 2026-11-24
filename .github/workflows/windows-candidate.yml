@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       upgrade_with_owned_font:
-        description: Verify upgrade from alpha.6 while a real managed font is installed
+        description: Verify upgrade from alpha.7 while a real managed font is installed
         type: boolean
         default: false
 

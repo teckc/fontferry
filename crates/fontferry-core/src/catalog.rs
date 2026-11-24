@@ -7,7 +7,7 @@ use url::Url;
 
 use crate::{FontFerryError, Result};
 
-pub const CATALOG_SCHEMA_VERSION: u32 = 1;
+pub const CATALOG_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -21,7 +21,7 @@ pub struct Catalog {
 
 impl Catalog {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != CATALOG_SCHEMA_VERSION {
+        if !matches!(self.schema_version, 1 | CATALOG_SCHEMA_VERSION) {
             return Err(FontFerryError::InvalidCatalog(format!(
                 "unsupported schema version {}",
                 self.schema_version
@@ -93,6 +93,17 @@ impl FontDefinition {
             if !variant_ids.insert(&variant.id) {
                 return Err(FontFerryError::InvalidCatalog(format!(
                     "font '{}' has duplicate variant '{}'",
+                    self.id, variant.id
+                )));
+            }
+            let mut members = BTreeSet::new();
+            if (variant.web_only && variant.default)
+                || variant.archive_members.iter().any(|name| {
+                    name.is_empty() || name.contains(['/', '\\', ':']) || !members.insert(name)
+                })
+            {
+                return Err(FontFerryError::InvalidCatalog(format!(
+                    "font '{}' variant '{}' has invalid package options",
                     self.id, variant.id
                 )));
             }
@@ -209,6 +220,12 @@ pub struct Variant {
     pub description: String,
     pub asset_pattern: String,
     pub default: bool,
+    #[serde(default)]
+    pub advanced: bool,
+    #[serde(default)]
+    pub web_only: bool,
+    #[serde(default)]
+    pub archive_members: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]

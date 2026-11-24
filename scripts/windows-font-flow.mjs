@@ -9,7 +9,8 @@ import { promisify } from "node:util";
 
 const execute = promisify(execFile);
 const installer = process.argv[2];
-const baseline = process.argv[4];
+const expectedVersion = process.argv[4];
+const baseline = process.argv[5];
 const powershell = process.env.WINDIR + "\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
 
 async function ps(command) {
@@ -176,7 +177,7 @@ async function verifyUpgrade(location) {
   await start();
   await openCatalog();
   await openFont("得意黑");
-  await click("安装字体", drawer);
+  await chooseSmiley();
   await shown("安装完成", drawer);
   const fontVersion = await evaluate("document.querySelector('[role=dialog] .detail-grid strong').textContent");
   await verifyRegistered();
@@ -187,7 +188,7 @@ async function verifyUpgrade(location) {
   await stop();
   await execute(installer, ["/S"], { timeout: 120000 });
   const version = await ps("Get-ItemPropertyValue -LiteralPath 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\FontFerry' -Name DisplayVersion");
-  assert.equal(version, "0.2.0-alpha.7");
+  assert.equal(version, expectedVersion);
   await start();
   await openCatalog();
   await openFont("得意黑");
@@ -195,7 +196,7 @@ async function verifyUpgrade(location) {
   assert.equal(await evaluate("document.querySelector('[role=dialog] .detail-grid strong').textContent"), fontVersion);
   await verifyRegistered();
   assert.deepEqual(await Promise.all(files.map((file) => readFile(join(directory, file)))), originalBytes);
-  console.log("PASS R01 owned font: alpha.6 -> alpha.7 preserved GDI selection, ownership, version, and font bytes");
+  console.log("PASS R01 owned font: alpha.7 -> " + expectedVersion + " preserved GDI selection, ownership, version, and font bytes");
 }
 
 async function openCatalog() {
@@ -213,6 +214,7 @@ async function verifyFirstUse(location) {
 
 try {
   assert.ok(installer);
+  assert.ok(expectedVersion);
   assert.match(await ps("[Security.Principal.WindowsIdentity]::GetCurrent().Name"), new RegExp("\\\\" + process.argv[3] + "$", "i"));
   const administrator = await ps("$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()); $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)");
   assert.equal(administrator, "False", "Native product smoke must run as a standard user");
@@ -297,7 +299,7 @@ async function firstInstallCases(port) {
 
   await evaluate("document.querySelector('button[aria-label=关闭]').click()");
   await openFont("Maple Mono");
-  for (const name of ["MapleMono-NF-CN", "MapleMono-TTF"]) {
+  for (const name of ["中文 + Nerd Font", "标准"]) {
     assert.equal(await evaluate(
       "(() => { const label = [...document.querySelectorAll('[role=dialog] label')].find((item) => item.querySelector('strong')?.textContent === " +
       JSON.stringify(name) + "); if (!label) return false; label.querySelector('input').click(); return true; })()",
@@ -309,4 +311,26 @@ async function firstInstallCases(port) {
   await click("确认安装", drawer);
   await shown("安装完成", drawer);
   console.log("PASS A03: real installer honored the non-default Maple Mono TTF variant");
+
+  await evaluate("document.querySelector('button[aria-label=关闭]').click()");
+  await openFont("霞鹜文楷");
+  for (const name of ["文楷", "文楷 Mono"]) {
+    const changed = await evaluate(
+      "(() => { const label = [...document.querySelectorAll('[role=dialog] label')].find((item) => item.querySelector('strong')?.textContent === " +
+      JSON.stringify(name) + "); if (!label) return false; label.querySelector('input').click(); return true; })()",
+    );
+    assert.equal(changed, true, "Variant not found: " + name);
+  }
+  await click("安装字体", drawer);
+  for (const weight of ["Light", "Regular", "Medium"]) {
+    await shown("LXGWWenKaiMono-" + weight + ".ttf", drawer);
+  }
+  assert.equal(await evaluate("document.querySelector('[role=dialog]').innerText.includes('LXGWWenKai-Regular.ttf')"), false);
+  await click("确认安装", drawer);
+  await shown("安装完成", drawer);
+  const wenkaiFiles = (await readdir(fontDirectory)).filter((name) => /^lxgw-wenkai-/i.test(name));
+  assert.equal(wenkaiFiles.length, 3);
+  const wenkaiRegistered = await ps("Add-Type -AssemblyName System.Drawing; $fonts = New-Object Drawing.Text.InstalledFontCollection; $fonts.Families | ForEach-Object { $_.GetName(1033) } | Where-Object { $_ -match 'WenKai' }");
+  assert.match(wenkaiRegistered, /WenKai Mono/i);
+  console.log("PASS: LXGW WenKai Mono installed only the three requested archive members");
 }

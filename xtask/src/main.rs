@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use clap::{Parser, Subcommand};
 use ed25519_dalek::{Signer, SigningKey};
+use fontferry_core::Catalog;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
@@ -54,6 +55,8 @@ fn main() -> Result<()> {
                 ],
             )?;
             run("cargo", &["test", "--workspace", "--locked"])?;
+            run("node", &["scripts/generate-catalog.mjs", "--check"])?;
+            validate_catalog()?;
             run(pnpm, &["check"])?;
             run(pnpm, &["test"])?;
             run(pnpm, &["build"])
@@ -75,22 +78,12 @@ fn main() -> Result<()> {
 fn validate_catalog() -> Result<()> {
     let body =
         fs::read_to_string("catalog/builtin/catalog.json").context("read built-in catalog")?;
-    let value: serde_json::Value = serde_json::from_str(&body).context("parse catalog JSON")?;
-    if value
-        .pointer("/schemaVersion")
-        .and_then(serde_json::Value::as_u64)
-        != Some(1)
-    {
-        bail!("catalog schemaVersion must be 1");
-    }
-    let fonts = value
-        .pointer("/fonts")
-        .and_then(serde_json::Value::as_array)
-        .context("catalog fonts must be an array")?;
-    if fonts.is_empty() {
+    let catalog: Catalog = serde_json::from_str(&body).context("parse catalog JSON")?;
+    catalog.validate()?;
+    if catalog.fonts.is_empty() {
         bail!("catalog must contain at least one font");
     }
-    println!("catalog: {} entries", fonts.len());
+    println!("catalog: {} entries", catalog.fonts.len());
     Ok(())
 }
 
@@ -108,7 +101,8 @@ fn catalog_signing_key() -> Result<SigningKey> {
 
 fn sign_catalog(input: &Path, output: &Path) -> Result<()> {
     let body = fs::read(input).with_context(|| format!("read {}", input.display()))?;
-    let _: serde_json::Value = serde_json::from_slice(&body).context("parse catalog JSON")?;
+    let catalog: Catalog = serde_json::from_slice(&body).context("parse catalog JSON")?;
+    catalog.validate()?;
     let signature = catalog_signing_key()?.sign(&body);
     fs::write(
         output,

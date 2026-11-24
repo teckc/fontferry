@@ -1,0 +1,412 @@
+{
+  "schemaVersion": 2,
+  "revision": "builtin-2026-11-24",
+  "generatedAt": "2026-11-24T00:00:00+08:00",
+  "fonts": [
+    {
+      "id": "maple-mono",
+      "name": "Maple Mono",
+      "description": "圆角等宽字体，作者提供中文、Nerd Font、无连字等多种字体包。",
+      "homepage": "https://github.com/subframe7536/maple-font",
+      "license": {
+        "name": "SIL Open Font License 1.1",
+        "url": "https://github.com/subframe7536/maple-font/blob/variable/OFL.txt",
+        "spdx": "OFL-1.1",
+        "revision": "OFL-1.1",
+        "requiresAcceptance": false,
+        "redistributionAllowed": true
+      },
+      "versionProvider": {
+        "type": "githubRelease",
+        "repository": "subframe7536/maple-font",
+        "channel": "stable"
+      },
+      "artifactProvider": {
+        "type": "githubAsset",
+        "repository": "subframe7536/maple-font"
+      },
+      "deliveryPolicy": "autoInstall",
+      "versionPolicy": {},
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "variantMatrix": {
+        "prefixes": [
+          "MapleMono",
+          "MapleMonoNL",
+          "MapleMonoNormal",
+          "MapleMonoNormalNL"
+        ],
+        "suffixes": [
+          "CN-unhinted",
+          "CN",
+          "NF-CN-unhinted",
+          "NF-CN",
+          "NF-unhinted",
+          "NF",
+          "OTF",
+          "TTF-AutoHint",
+          "TTF",
+          "Variable",
+          "Woff2"
+        ],
+        "recommended": {
+          "MapleMono-TTF": {
+            "name": "标准",
+            "description": "适合编辑器使用"
+          },
+          "MapleMono-NF": {
+            "name": "Nerd Font",
+            "description": "包含终端和编辑器图标"
+          },
+          "MapleMono-CN": {
+            "name": "中文",
+            "description": "包含中文字符"
+          },
+          "MapleMono-NF-CN": {
+            "name": "中文 + Nerd Font",
+            "description": "包含中文字符及终端和编辑器图标"
+          }
+        },
+        "default": "MapleMono-NF-CN",
+        "webSuffixes": [
+          "Woff2"
+        ]
+      }
+    },
+    {
+      "id": "zhuque-fangsong",
+      "name": "朱雀仿宋",
+      "description": "开源仿宋字体；目前的新版本会标记为测试版。",
+      "homepage": "https://github.com/TrionesType/zhuque",
+      "license": {
+        "name": "SIL Open Font License 1.1",
+        "url": "https://github.com/TrionesType/zhuque/blob/main/OFL.txt",
+        "spdx": "OFL-1.1",
+        "revision": "OFL-1.1",
+        "requiresAcceptance": false,
+        "redistributionAllowed": true
+      },
+      "versionProvider": {
+        "type": "githubRelease",
+        "repository": "TrionesType/zhuque",
+        "channel": "prerelease"
+      },
+      "artifactProvider": {
+        "type": "githubAsset",
+        "repository": "TrionesType/zhuque"
+      },
+      "deliveryPolicy": "autoInstall",
+      "versionPolicy": {},
+      "variants": [
+        {
+          "id": "standard",
+          "name": "标准版",
+          "description": "上游标准压缩包。",
+          "assetPattern": "^ZhuqueFangsong-v?[0-9.]+\\.zip$",
+          "default": true
+        }
+      ],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ]
+    },
+    {
+      "id": "lxgw-wenkai",
+      "name": "霞鹜文楷",
+      "description": "面向屏幕阅读的开源中文楷体。",
+      "homepage": "https://github.com/lxgw/LxgwWenkai",
+      "license": {
+        "name": "SIL Open Font License 1.1",
+        "url": "https://github.com/lxgw/LxgwWenkai/blob/main/OFL.txt",
+        "spdx": "OFL-1.1",
+        "revision": "OFL-1.1",
+        "requiresAcceptance": false,
+        "redistributionAllowed": true
+      },
+      "versionProvider": {
+        "type": "githubRelease",
+        "repository": "lxgw/LxgwWenkai",
+        "channel": "stable"
+      },
+      "artifactProvider": {
+        "type": "githubAsset",
+        "repository": "lxgw/LxgwWenkai"
+      },
+      "deliveryPolicy": "autoInstall",
+      "versionPolicy": {},
+      "variants": [
+        {
+          "id": "proportional",
+          "name": "文楷",
+          "description": "比例字体，包含完整字重。",
+          "assetPattern": "^lxgw-wenkai-v?[0-9.]+\\.zip$",
+          "default": true,
+          "archiveMembers": [
+            "LXGWWenKai-Light.ttf",
+            "LXGWWenKai-Regular.ttf",
+            "LXGWWenKai-Medium.ttf"
+          ]
+        },
+        {
+          "id": "mono",
+          "name": "文楷 Mono",
+          "description": "等宽版本的三个 TTF 文件。",
+          "assetPattern": "^lxgw-wenkai-v?[0-9.]+\\.zip$",
+          "default": false,
+          "archiveMembers": [
+            "LXGWWenKaiMono-Light.ttf",
+            "LXGWWenKaiMono-Regular.ttf",
+            "LXGWWenKaiMono-Medium.ttf"
+          ]
+        }
+      ],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ]
+    },
+    {
+      "id": "sarasa-gothic",
+      "name": "更纱黑体",
+      "description": "面向 CJK 编程与界面的多风格字体家族。",
+      "homepage": "https://github.com/be5invis/Sarasa-Gothic",
+      "license": {
+        "name": "SIL Open Font License 1.1",
+        "url": "https://github.com/be5invis/Sarasa-Gothic/blob/main/LICENSE",
+        "spdx": "OFL-1.1",
+        "revision": "OFL-1.1",
+        "requiresAcceptance": false,
+        "redistributionAllowed": true
+      },
+      "versionProvider": {
+        "type": "githubRelease",
+        "repository": "be5invis/Sarasa-Gothic",
+        "channel": "stable"
+      },
+      "artifactProvider": {
+        "type": "githubAsset",
+        "repository": "be5invis/Sarasa-Gothic"
+      },
+      "deliveryPolicy": "autoInstall",
+      "versionPolicy": {},
+      "variants": [
+        {
+          "id": "mono-sc",
+          "name": "Mono SC · 编辑器",
+          "description": "简体中文等宽 TTF。",
+          "assetPattern": "^SarasaMonoSC-TTF-[0-9.]+\\.7z$",
+          "default": true
+        },
+        {
+          "id": "gothic-sc",
+          "name": "Gothic SC · 正文",
+          "description": "简体中文比例 TTF。",
+          "assetPattern": "^SarasaGothicSC-TTF-[0-9.]+\\.7z$",
+          "default": false
+        },
+        {
+          "id": "term-sc",
+          "name": "Term SC · 终端",
+          "description": "简体中文终端 TTF。",
+          "assetPattern": "^SarasaTermSC-TTF-[0-9.]+\\.7z$",
+          "default": false
+        }
+      ],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ]
+    },
+    {
+      "id": "smiley-sans",
+      "name": "得意黑",
+      "description": "具有倾斜动态造型的开源中文黑体。",
+      "homepage": "https://github.com/atelier-anchor/smiley-sans",
+      "license": {
+        "name": "SIL Open Font License 1.1",
+        "url": "https://github.com/atelier-anchor/smiley-sans/blob/main/LICENSE",
+        "spdx": "OFL-1.1",
+        "revision": "OFL-1.1",
+        "requiresAcceptance": false,
+        "redistributionAllowed": true
+      },
+      "versionProvider": {
+        "type": "githubRelease",
+        "repository": "atelier-anchor/smiley-sans",
+        "channel": "stable"
+      },
+      "artifactProvider": {
+        "type": "githubAsset",
+        "repository": "atelier-anchor/smiley-sans"
+      },
+      "deliveryPolicy": "autoInstall",
+      "versionPolicy": {},
+      "variants": [
+        {
+          "id": "standard",
+          "name": "标准版",
+          "description": "上游完整压缩包。",
+          "assetPattern": "^smiley-sans-v?[0-9.]+\\.zip$",
+          "default": true
+        }
+      ],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ]
+    },
+    {
+      "id": "source-han-serif",
+      "name": "思源宋体",
+      "description": "Adobe 与 Google 发布的泛中日韩开源宋体。",
+      "homepage": "https://github.com/adobe-fonts/source-han-serif",
+      "license": {
+        "name": "SIL Open Font License 1.1",
+        "url": "https://github.com/adobe-fonts/source-han-serif/blob/release/LICENSE.txt",
+        "spdx": "OFL-1.1",
+        "revision": "OFL-1.1",
+        "requiresAcceptance": false,
+        "redistributionAllowed": true
+      },
+      "versionProvider": {
+        "type": "githubRelease",
+        "repository": "adobe-fonts/source-han-serif",
+        "channel": "stable"
+      },
+      "artifactProvider": {
+        "type": "githubAsset",
+        "repository": "adobe-fonts/source-han-serif"
+      },
+      "deliveryPolicy": "autoInstall",
+      "versionPolicy": {},
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "variantTemplate": {
+        "name": "source-han",
+        "parameters": {
+          "family": "SourceHanSerif"
+        }
+      }
+    },
+    {
+      "id": "source-han-sans",
+      "name": "思源黑体",
+      "description": "Adobe 与 Google 发布的泛中日韩开源黑体。",
+      "homepage": "https://github.com/adobe-fonts/source-han-sans",
+      "license": {
+        "name": "SIL Open Font License 1.1",
+        "url": "https://github.com/adobe-fonts/source-han-sans/blob/release/LICENSE.txt",
+        "spdx": "OFL-1.1",
+        "revision": "OFL-1.1",
+        "requiresAcceptance": false,
+        "redistributionAllowed": true
+      },
+      "versionProvider": {
+        "type": "githubRelease",
+        "repository": "adobe-fonts/source-han-sans",
+        "channel": "stable"
+      },
+      "artifactProvider": {
+        "type": "githubAsset",
+        "repository": "adobe-fonts/source-han-sans"
+      },
+      "deliveryPolicy": "autoInstall",
+      "versionPolicy": {},
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
+      "variantTemplate": {
+        "name": "source-han",
+        "parameters": {
+          "family": "SourceHanSans"
+        }
+      }
+    },
+    {
+      "id": "font-awesome-pro",
+      "name": "Font Awesome Pro",
+      "description": "检查官网公布的新版本。Pro 字体需要你自行从官网下载，字渡只提醒。",
+      "homepage": "https://fontawesome.com/",
+      "license": {
+        "name": "Font Awesome Pro Commercial License",
+        "url": "https://fontawesome.com/license",
+        "spdx": null,
+        "revision": "commercial-current",
+        "requiresAcceptance": true,
+        "redistributionAllowed": false
+      },
+      "versionProvider": {
+        "type": "fontAwesomeReleaseApi",
+        "major": null
+      },
+      "artifactProvider": null,
+      "deliveryPolicy": "notifyOnly",
+      "versionPolicy": {},
+      "variants": [],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ]
+    },
+    {
+      "id": "mi-sans",
+      "name": "MiSans / 小米澎湃 OS 字体",
+      "description": "官网没有可供字渡直接下载的固定地址；网页有变化时提醒你手动查看。",
+      "homepage": "https://hyperos.mi.com/font/zh/",
+      "license": {
+        "name": "Xiaomi Font License",
+        "url": "https://hyperos.mi.com/font/zh/",
+        "spdx": null,
+        "revision": "official-site-current",
+        "requiresAcceptance": true,
+        "redistributionAllowed": false
+      },
+      "versionProvider": {
+        "type": "httpFingerprint",
+        "url": "https://hyperos.mi.com/font/zh/download/"
+      },
+      "artifactProvider": null,
+      "deliveryPolicy": "notifyOnly",
+      "versionPolicy": {},
+      "variants": [],
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ]
+    }
+  ],
+  "templates": {
+    "source-han": [
+      {
+        "id": "cn",
+        "name": "简体中文静态版",
+        "description": "中国大陆字形的静态 OTF",
+        "assetPattern": "^[0-9]+_{family}CN\\.zip$",
+        "default": true
+      },
+      {
+        "id": "variable",
+        "name": "可变字体",
+        "description": "上游完整可变字体包，下载量较大",
+        "assetPattern": "^[0-9]+_{family}-VF\\.zip$",
+        "default": false,
+        "advanced": true
+      }
+    ]
+  }
+}

@@ -11,8 +11,11 @@ cargo xtask check
 cargo deny check
 ```
 
-新增内置字体应修改 `catalog/builtin/catalog.json`，确认许可证、Release 资产正则及三平台
-支持情况。目录分支发布物必须由目录专用 Ed25519 密钥签名，不能复用应用更新密钥。
+内置字体的维护源是 `catalog/source.json`。确认许可证、发布附件匹配规则及平台支持后，
+运行 `node scripts/generate-catalog.mjs` 更新内置目录，再运行 `cargo xtask validate-catalog`。
+模板只允许声明现有规格，生成结果保留规格 ID，CI 检查生成结果与提交一致。
+目录分支发布物使用目录专用 Ed25519 密钥签名。包含包内文件选择规则的目录使用 schema 2。
+
 
 Actions 依赖必须固定到完整 commit SHA。字体文件、商标、签名私钥、平台证书、Token、
 数据库、日志及构建产物不得提交。

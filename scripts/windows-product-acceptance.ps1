@@ -18,10 +18,10 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'windows-font-flow.mjs') -Destin
 $node = (Get-Command node.exe -ErrorAction Stop).Source
 $baseline = $null
 if ($VerifyUpgrade) {
-    $baseline = Join-Path $stage 'alpha6-setup.exe'
-    Invoke-WebRequest 'https://github.com/teckc/fontferry/releases/download/v0.2.0-alpha.6/FontFerry_0.2.0-alpha.6_x64-setup.exe' -OutFile $baseline
-    if ((Get-FileHash -LiteralPath $baseline).Hash -ne 'b52f6946a8365f6420f1eaa3877a847f7b4798b357b8b7af679354e5a66c1414') {
-        throw 'Unexpected official alpha.6 installer digest'
+    $baseline = Join-Path $stage 'alpha7-setup.exe'
+    Invoke-WebRequest 'https://github.com/teckc/fontferry/releases/download/v0.2.0-alpha.7/FontFerry_0.2.0-alpha.7_x64-setup.exe' -OutFile $baseline
+    if ((Get-FileHash -LiteralPath $baseline).Hash -ne 'b6d6109c2c93ace139fd45233ded8a28ffe8640e614404a4fedcb8b49bfabcd7') {
+        throw 'Unexpected official alpha.7 installer digest'
     }
 }
 $username = 'ff-' + (Get-Random -Minimum 100000 -Maximum 999999)
@@ -36,7 +36,7 @@ try {
     $candidate = Join-Path $stage 'candidate.exe'
     $stdout = Join-Path $env:RUNNER_TEMP 'fontferry-native-stdout.txt'
     $stderr = Join-Path $env:RUNNER_TEMP 'fontferry-native-stderr.txt'
-    $arguments = "`"$script`" `"$candidate`" $username"
+    $arguments = "`"$script`" `"$candidate`" $username $Version"
     if ($baseline) { $arguments += " `"$baseline`"" }
     $process = Start-Process -FilePath $node -ArgumentList $arguments `
         -Credential $credential -LoadUserProfile -WorkingDirectory $stage `

@@ -178,6 +178,12 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: ./scripts/windows-product-acceptance.ps1 -BundlePath windows-bundle -Version ($env:RELEASE_TAG.Substring(1))
 
+      - name: Upgrade the previous release with a managed Windows font
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: ./scripts/windows-product-acceptance.ps1 -BundlePath windows-bundle -Version ($env:RELEASE_TAG.Substring(1)) -VerifyUpgrade
+
   publish:
     name: Verify bundles and publish GitHub release
     needs: [prepare, build, sbom, windows-smoke]

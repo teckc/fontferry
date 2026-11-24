@@ -6,6 +6,8 @@ export interface Variant {
   description: string;
   assetPattern: string;
   default: boolean;
+  advanced?: boolean;
+  webOnly?: boolean;
 }
 
 export interface FontDefinition {
@@ -50,6 +52,7 @@ export interface UpdateStatus {
   currentVersion: string | null;
   availableVersion: string | null;
   updateAvailable: boolean;
+  packageIssue?: string | null;
   deliveryPolicy: DeliveryPolicy;
 }
 
@@ -58,6 +61,8 @@ export type InstallStage = "check" | "download" | "verify" | "register";
 export interface InstallCandidate {
   version: string;
   assetNames: string[];
+  downloadBytes?: number | null;
+  archiveMembers?: string[];
   identity: string;
 }
 

@@ -1294,7 +1294,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "fontferry"
-version = "0.2.0-alpha.7"
+version = "0.2.0-alpha.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -1320,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "fontferry-core"
-version = "0.2.0-alpha.7"
+version = "0.2.0-alpha.8"
 dependencies = [
  "async-trait",
  "hex",
@@ -1340,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "fontferry-platform"
-version = "0.2.0-alpha.7"
+version = "0.2.0-alpha.8"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -6276,12 +6276,13 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.2.0-alpha.7"
+version = "0.2.0-alpha.8"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
  "clap",
  "ed25519-dalek",
+ "fontferry-core",
  "serde_json",
  "sha2 0.11.0",
  "walkdir",

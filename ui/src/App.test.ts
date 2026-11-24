@@ -110,7 +110,10 @@ test("open font details refresh after installation without reopening", async () 
 
 
 test("legacy empty variants resolve defaults only when opening details", async () => {
-  const font = { ...catalog.fonts[0], variants: [{ id: "default", name: "默认包", description: "默认", assetPattern: "a", default: true }] };
+  const font = { ...catalog.fonts[0], variants: [
+    { id: "default", name: "默认包", description: "默认", assetPattern: "a", default: true },
+    { id: "alternate", name: "备用包", description: "备用", assetPattern: "b", default: false },
+  ] };
   vi.mocked(invoke).mockResolvedValue({ fonts: [font], installed: [{ fontId: font.id, version: "1.0", variantIds: [], previous: null }], statuses: [], activities: [] });
   render(App);
   await waitFor(() => expect(screen.queryByText("正在读取字体状态…")).not.toBeInTheDocument());

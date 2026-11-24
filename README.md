@@ -48,6 +48,7 @@ pnpm tauri:dev
 fontferry update --eligible --headless
 ```
 
+内置目录从 `catalog/source.json` 生成，维护命令见[贡献指南](CONTRIBUTING.md)。
 目录签名、平台签名和更新包要求见 [发布与目录签名](docs/release-signing.md)。deb 和 rpm 由系统包管理器更新。
 
 ## 许可与隐私

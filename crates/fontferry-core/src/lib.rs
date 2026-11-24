@@ -8,7 +8,7 @@ mod operation;
 pub mod ports;
 pub mod version;
 
-pub use candidate::{InstallCandidate, select_release_assets};
+pub use candidate::{InstallCandidate, select_release_assets, select_variant_assets};
 pub use catalog::*;
 pub use engine::*;
 pub use error::*;

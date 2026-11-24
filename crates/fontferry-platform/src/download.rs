@@ -1,9 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
 use fontferry_core::{
-    ArtifactProvider, ArtifactSource, FontDefinition, FontFerryError, Release, Result,
-    select_release_assets,
+    ArtifactProvider, ArtifactSource, DownloadedArtifact, FontDefinition, FontFerryError, Release,
+    Result, select_variant_assets,
 };
 use futures_util::StreamExt;
 use reqwest::{Client, StatusCode};
@@ -16,6 +19,13 @@ use crate::{HttpClient, validate_public_https};
 const MAX_DOWNLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_DOWNLOAD_ATTEMPTS: usize = 3;
 
+struct ArtifactDownload {
+    url: Url,
+    digest: Option<String>,
+    required_members: Vec<String>,
+    include_all: bool,
+}
+
 #[async_trait]
 impl ArtifactSource for HttpClient {
     async fn download(
@@ -25,43 +35,67 @@ impl ArtifactSource for HttpClient {
         release: &Release,
         variant_ids: &[String],
         staging_directory: &Path,
-    ) -> Result<Vec<PathBuf>> {
-        let assets = match provider {
-            ArtifactProvider::GitHubAsset { repository: _ } => {
-                select_release_assets(font, release, variant_ids)?
-                    .into_iter()
-                    .map(|asset| {
-                        let url = Url::parse(&asset.url)
-                            .map_err(|error| FontFerryError::Network(error.to_string()))?;
-                        Ok((url, asset.name.clone(), asset.digest.clone()))
-                    })
-                    .collect::<Result<Vec<_>>>()?
+    ) -> Result<Vec<DownloadedArtifact>> {
+        let mut assets = BTreeMap::new();
+        match provider {
+            ArtifactProvider::GitHubAsset { .. } => {
+                for (variant, asset) in select_variant_assets(font, release, variant_ids)? {
+                    let download = match assets.entry(asset.name.clone()) {
+                        std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                        std::collections::btree_map::Entry::Vacant(entry) => {
+                            let url = Url::parse(&asset.url)
+                                .map_err(|error| FontFerryError::Network(error.to_string()))?;
+                            entry.insert(ArtifactDownload {
+                                url,
+                                digest: asset.digest.clone(),
+                                required_members: Vec::new(),
+                                include_all: false,
+                            })
+                        }
+                    };
+                    download.include_all |= variant.archive_members.is_empty();
+                    download
+                        .required_members
+                        .extend_from_slice(&variant.archive_members);
+                }
             }
             ArtifactProvider::DirectUrl { url } => {
                 let name = url
                     .path_segments()
                     .and_then(Iterator::last)
                     .filter(|name| !name.is_empty())
-                    .unwrap_or("font-download")
-                    .to_owned();
-                vec![(url.clone(), name, None)]
+                    .unwrap_or("font-download");
+                assets.insert(
+                    name.to_owned(),
+                    ArtifactDownload {
+                        url: url.clone(),
+                        digest: None,
+                        required_members: Vec::new(),
+                        include_all: true,
+                    },
+                );
             }
-        };
-
-        let mut paths = Vec::with_capacity(assets.len());
-        for (index, (url, name, digest)) in assets.into_iter().enumerate() {
-            paths.push(
-                download_one(
-                    self,
-                    &url,
-                    &format!("{index}-{}", safe_filename(&name)),
-                    digest.as_deref(),
-                    staging_directory,
-                )
-                .await?,
-            );
         }
-        Ok(paths)
+
+        let mut downloaded = Vec::with_capacity(assets.len());
+        for (index, (name, mut asset)) in assets.into_iter().enumerate() {
+            let path = download_one(
+                self,
+                &asset.url,
+                &format!("{index}-{}", safe_filename(&name)),
+                asset.digest.as_deref(),
+                staging_directory,
+            )
+            .await?;
+            asset.required_members.sort();
+            asset.required_members.dedup();
+            downloaded.push(DownloadedArtifact {
+                path,
+                required_members: asset.required_members,
+                include_all: asset.include_all,
+            });
+        }
+        Ok(downloaded)
     }
 }
 

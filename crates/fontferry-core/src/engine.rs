@@ -20,6 +20,8 @@ pub struct UpdateStatus {
     pub current_version: Option<String>,
     pub available_version: Option<String>,
     pub update_available: bool,
+    #[serde(default)]
+    pub package_issue: Option<String>,
     pub delivery_policy: DeliveryPolicy,
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub checked_at: Option<OffsetDateTime>,
@@ -31,17 +33,18 @@ impl UpdateStatus {
     pub fn refresh_local(&mut self, current: Option<String>, fingerprint: bool) {
         self.current_version = current;
         self.from_cache = true;
-        self.update_available = match (&self.current_version, &self.available_version) {
-            (Some(current), Some(available)) => {
-                if fingerprint {
-                    current != available
-                } else {
-                    is_update_available(current, available)
+        self.update_available = self.package_issue.is_none()
+            && match (&self.current_version, &self.available_version) {
+                (Some(current), Some(available)) => {
+                    if fingerprint {
+                        current != available
+                    } else {
+                        is_update_available(current, available)
+                    }
                 }
-            }
-            (None, Some(_)) => true,
-            _ => false,
-        };
+                (None, Some(_)) => !fingerprint,
+                _ => false,
+            };
     }
 }
 
@@ -151,19 +154,39 @@ impl FontEngine {
                         .or(item.detected_version.as_ref())
                 })
             });
+        let package_issue = latest.and_then(|release| {
+            if !matches!(
+                font.artifact_provider,
+                Some(crate::ArtifactProvider::GitHubAsset { .. })
+            ) {
+                return None;
+            }
+            if font.variants.is_empty() {
+                return None;
+            }
+            let variants = update_variants(font, installed.as_ref());
+            crate::select_release_assets(font, release, &variants)
+                .err()
+                .map(|error| error.to_string())
+        });
         let available = latest.map(|item| item.version.as_str());
         Ok(UpdateStatus {
             font_id: font_id.to_owned(),
             current_version: current.cloned(),
             available_version: available.map(str::to_owned),
-            update_available: match (current, available) {
-                (Some(current), Some(available)) => match font.version_provider {
-                    crate::VersionProvider::HttpFingerprint { .. } => current != available,
-                    _ => is_update_available(current, available),
+            update_available: package_issue.is_none()
+                && match (current, available) {
+                    (Some(current), Some(available)) => match font.version_provider {
+                        crate::VersionProvider::HttpFingerprint { .. } => current != available,
+                        _ => is_update_available(current, available),
+                    },
+                    (None, Some(_)) => !matches!(
+                        font.version_provider,
+                        crate::VersionProvider::HttpFingerprint { .. }
+                    ),
+                    _ => false,
                 },
-                (None, Some(_)) => true,
-                _ => false,
-            },
+            package_issue,
             delivery_policy: font.delivery_policy,
             checked_at: Some(OffsetDateTime::now_utc()),
             from_cache: false,
@@ -385,16 +408,7 @@ impl FontEngine {
         if !status.update_available {
             return Ok(None);
         }
-        let variants = if current.variant_ids.is_empty() {
-            self.font(font_id)?
-                .variants
-                .iter()
-                .filter(|v| v.default)
-                .map(|v| v.id.clone())
-                .collect()
-        } else {
-            current.variant_ids
-        };
+        let variants = update_variants(self.font(font_id)?, Some(&current));
         match self
             .install_inner(
                 InstallRequest {
@@ -588,11 +602,31 @@ impl FontEngine {
     }
 }
 
+fn update_variants(font: &FontDefinition, installed: Option<&InstalledFont>) -> Vec<String> {
+    if let Some(installed) = installed
+        && !installed.variant_ids.is_empty()
+    {
+        return installed.variant_ids.clone();
+    }
+    let mut installable = font.variants.iter().filter(|variant| !variant.web_only);
+    if let (Some(only), None) = (installable.next(), installable.next()) {
+        return vec![only.id.clone()];
+    }
+    font.variants
+        .iter()
+        .filter(|variant| variant.default)
+        .map(|variant| variant.id.clone())
+        .collect()
+}
+
 fn validate_install(font: &FontDefinition, variants: &[String]) -> Result<()> {
     if (!font.variants.is_empty() && variants.is_empty())
-        || variants
-            .iter()
-            .any(|id| !font.variants.iter().any(|variant| variant.id == *id))
+        || variants.iter().any(|id| {
+            !font
+                .variants
+                .iter()
+                .any(|variant| variant.id == *id && !variant.web_only)
+        })
     {
         return Err(FontFerryError::DownloadRejected(
             "请选择有效的字体包".into(),
@@ -675,6 +709,24 @@ mod tests {
         }
     }
 
+    struct PartialRelease;
+
+    #[async_trait]
+    impl ReleaseSource for PartialRelease {
+        async fn releases(
+            &self,
+            font: &FontDefinition,
+            provider: &VersionProvider,
+        ) -> Result<Vec<Release>> {
+            let mut releases = StaticReleases.releases(font, provider).await?;
+            let mut latest = releases[0].clone();
+            latest.version = "3.0.0".into();
+            latest.assets[0].name = "alternative.zip".into();
+            releases.push(latest);
+            Ok(releases)
+        }
+    }
+
     struct ReplacedAsset(AtomicUsize);
 
     #[async_trait]
@@ -701,7 +753,7 @@ mod tests {
             _release: &Release,
             _variant_ids: &[String],
             _staging_directory: &Path,
-        ) -> Result<Vec<PathBuf>> {
+        ) -> Result<Vec<crate::DownloadedArtifact>> {
             Ok(Vec::new())
         }
     }
@@ -712,7 +764,7 @@ mod tests {
     impl FontPreparer for PreparedArtifact {
         async fn prepare(
             &self,
-            _downloaded: &[PathBuf],
+            _downloaded: &[crate::DownloadedArtifact],
             staging_directory: &Path,
         ) -> Result<Vec<PreparedFont>> {
             Ok(vec![PreparedFont {
@@ -858,6 +910,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn newer_release_without_saved_package_does_not_offer_an_update()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let catalog: crate::Catalog =
+            serde_json::from_str(include_str!("../../../catalog/builtin/catalog.json"))?;
+        let mut definition = font(DeliveryPolicy::AutoInstall)?;
+        let mut variants = catalog
+            .fonts
+            .into_iter()
+            .find(|font| font.id == "lxgw-wenkai")
+            .ok_or("missing LXGW WenKai catalog entry")?
+            .variants;
+        variants[0].asset_pattern = r"^font\.zip$".into();
+        variants[1].asset_pattern = r"^alternative\.zip$".into();
+        variants[0].default = false;
+        variants[1].default = true;
+        definition.variants = variants;
+        let staging = tempfile::tempdir()?;
+        let state = Arc::new(FailingState::default());
+        let engine = FontEngine::new(
+            vec![definition],
+            Arc::new(PartialRelease),
+            Arc::new(EmptyArtifact),
+            Arc::new(PreparedArtifact),
+            Arc::new(TrackingInstaller {
+                uninstall_count: Arc::new(AtomicUsize::new(0)),
+            }),
+            state.clone(),
+            staging.path().to_path_buf(),
+        );
+        state
+            .save_installed(&InstalledFont {
+                font_id: "test-font".into(),
+                version: "2.0.0".into(),
+                variant_ids: vec!["proportional".into()],
+                installed_at: OffsetDateTime::UNIX_EPOCH,
+                owned_files: vec![],
+                previous: None,
+                manual_version: None,
+            })
+            .await?;
+        let status = engine.check_font("test-font").await?;
+        assert_eq!(status.available_version.as_deref(), Some("3.0.0"));
+        assert!(status.package_issue.is_some());
+        assert!(!status.update_available);
+        assert!(
+            engine
+                .prepare_install("test-font", None, &["proportional".into()])
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            engine
+                .prepare_install("test-font", Some("2.0.0"), &["proportional".into()])
+                .await?
+                .version,
+            "2.0.0"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn replaced_asset_is_rejected_before_download_or_platform_write()
     -> std::result::Result<(), Box<dyn std::error::Error>> {
         let staging = tempfile::tempdir()?;
@@ -868,6 +981,9 @@ mod tests {
             description: String::new(),
             asset_pattern: r"^font\.zip$".into(),
             default: true,
+            advanced: false,
+            web_only: false,
+            archive_members: Vec::new(),
         });
         let state = Arc::new(FailingState::default());
         let engine = FontEngine::new(
@@ -1135,6 +1251,7 @@ mod status_tests {
             current_version: Some("1.9".into()),
             available_version: Some("1.10".into()),
             update_available: true,
+            package_issue: None,
             delivery_policy: DeliveryPolicy::AutoInstall,
             checked_at: Some(OffsetDateTime::UNIX_EPOCH),
             from_cache: false,
@@ -1155,6 +1272,7 @@ mod status_tests {
             current_version: Some("z".into()),
             available_version: Some("a".into()),
             update_available: false,
+            package_issue: None,
             delivery_policy: DeliveryPolicy::NotifyOnly,
             checked_at: None,
             from_cache: false,

@@ -186,7 +186,10 @@
     installFailureKind = "";
     licenseAccepted = false;
     const savedVariants = installed(font.id)?.variantIds;
-    selectedVariants = savedVariants?.length ? savedVariants.slice() : font.variants.filter((variant) => variant.default).map((variant) => variant.id);
+    const desktopVariants = font.variants.filter((variant) => !variant.webOnly);
+    selectedVariants = savedVariants?.length
+      ? savedVariants.slice()
+      : desktopVariants.filter((variant) => variant.default || desktopVariants.length === 1).map((variant) => variant.id);
     message = "";
     error = "";
     manualVersion = status(font.id)?.currentVersion ?? "";
@@ -214,7 +217,14 @@
       const result = await invoke<UpdateStatus>("check_font", { fontId });
       data.statuses = [...data.statuses.filter((item) => item.fontId !== fontId), result];
       failedChecks = failedChecks.filter((id) => id !== fontId);
-      message = result.updateAvailable ? `发现 ${result.availableVersion}` : "未发现可确认的新版本";
+      const pageTracked = data.fonts.find((font) => font.id === fontId)?.versionProvider.type === "httpFingerprint";
+      if (result.packageIssue) {
+        message = "已检查发布，当前规格不可用";
+      } else if (pageTracked) {
+        message = !result.currentVersion ? "已检查官方下载页" : result.updateAvailable ? "官方下载页有变化" : "官方下载页未检测到变化";
+      } else {
+        message = result.updateAvailable ? `发现 ${result.availableVersion}` : "未发现可确认的新版本";
+      }
     } catch (cause) {
       failedChecks = [...failedChecks.filter((id) => id !== fontId), fontId];
       data.statuses = data.statuses.map((item) => item.fontId === fontId ? { ...item, fromCache: true } : item);
@@ -273,10 +283,9 @@
     installFailureKind = "";
     operation = { kind: "check-fonts", title: "正在查找可安装版本", detail: font.name };
     try {
-      const online = status(font.id);
       candidate = await invoke<InstallCandidate>("prepare_font_install", {
         fontId: font.id,
-        version: online?.fromCache ? null : online?.availableVersion ?? null,
+        version: null,
         variantIds: selectedVariants,
       });
     } catch (cause) {
@@ -448,7 +457,7 @@
         fontId: font.id,
         version: manualVersion || null,
       });
-      message = "已保存当前版本";
+      message = font.versionProvider.type === "httpFingerprint" ? "已记录下载页状态" : "已保存当前版本";
       await load();
     } catch (cause) {
       error = String(cause);
@@ -618,7 +627,7 @@
             {#if font}
               <button class="font-row" onclick={() => openFont(font)}>
                 <span class="font-avatar">{font.name.slice(0, 1)}</span>
-                <span class="grow"><strong>{font.name}</strong><small>{item.currentVersion ?? "未安装"} → {item.availableVersion}</small></span>
+                <span class="grow"><strong>{font.name}</strong><small>{font.versionProvider.type === "httpFingerprint" ? (item.currentVersion ? "官方下载页有变化" : "已检查官方下载页") : font.deliveryPolicy === "notifyOnly" ? "官方版本 " + item.availableVersion : (item.currentVersion ?? "未安装") + " → " + item.availableVersion}</small></span>
                 <span class:reminder={item.deliveryPolicy === "notifyOnly"} class="pill">
                   {item.deliveryPolicy === "autoInstall" ? "可直接更新" : "手动更新"}
                 </span>

@@ -42,6 +42,13 @@ pub struct ObservedFont {
 }
 
 #[derive(Clone, Debug)]
+pub struct DownloadedArtifact {
+    pub path: PathBuf,
+    pub required_members: Vec<String>,
+    pub include_all: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct PreparedFont {
     pub path: PathBuf,
     pub family: String,
@@ -77,14 +84,14 @@ pub trait ArtifactSource: Send + Sync {
         release: &Release,
         variant_ids: &[String],
         staging_directory: &Path,
-    ) -> Result<Vec<PathBuf>>;
+    ) -> Result<Vec<DownloadedArtifact>>;
 }
 
 #[async_trait]
 pub trait FontPreparer: Send + Sync {
     async fn prepare(
         &self,
-        downloaded: &[PathBuf],
+        downloaded: &[DownloadedArtifact],
         staging_directory: &Path,
     ) -> Result<Vec<PreparedFont>>;
 }

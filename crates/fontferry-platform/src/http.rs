@@ -229,6 +229,7 @@ fn retain_font_releases(font: &FontDefinition, releases: &mut Vec<Release>) -> R
     let patterns = font
         .variants
         .iter()
+        .filter(|variant| !variant.web_only)
         .map(|variant| Regex::new(&variant.asset_pattern))
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|error| FontFerryError::InvalidCatalog(error.to_string()))?;

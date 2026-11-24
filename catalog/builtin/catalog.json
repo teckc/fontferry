@@ -1,7 +1,7 @@
 {
-  "schemaVersion": 1,
-  "revision": "builtin-2026-07-29",
-  "generatedAt": "2026-07-29T00:00:00Z",
+  "schemaVersion": 2,
+  "revision": "builtin-2026-11-24",
+  "generatedAt": "2026-11-24T00:00:00+08:00",
   "fonts": [
     {
       "id": "maple-mono",
@@ -27,53 +27,409 @@
       },
       "deliveryPolicy": "autoInstall",
       "versionPolicy": {},
-      "variants": [
-        { "id": "maplemono-cn-unhinted", "name": "MapleMono-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMono-CN-unhinted\\.zip$", "default": false },
-        { "id": "maplemono-cn", "name": "MapleMono-CN", "description": "上游原始文件名", "assetPattern": "^MapleMono-CN\\.zip$", "default": false },
-        { "id": "maplemono-nf-cn-unhinted", "name": "MapleMono-NF-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMono-NF-CN-unhinted\\.zip$", "default": false },
-        { "id": "maplemono-nf-cn", "name": "MapleMono-NF-CN", "description": "上游原始文件名", "assetPattern": "^MapleMono-NF-CN\\.zip$", "default": true },
-        { "id": "maplemono-nf-unhinted", "name": "MapleMono-NF-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMono-NF-unhinted\\.zip$", "default": false },
-        { "id": "maplemono-nf", "name": "MapleMono-NF", "description": "上游原始文件名", "assetPattern": "^MapleMono-NF\\.zip$", "default": false },
-        { "id": "maplemono-otf", "name": "MapleMono-OTF", "description": "上游原始文件名", "assetPattern": "^MapleMono-OTF\\.zip$", "default": false },
-        { "id": "maplemono-ttf-autohint", "name": "MapleMono-TTF-AutoHint", "description": "上游原始文件名", "assetPattern": "^MapleMono-TTF-AutoHint\\.zip$", "default": false },
-        { "id": "maplemono-ttf", "name": "MapleMono-TTF", "description": "上游原始文件名", "assetPattern": "^MapleMono-TTF\\.zip$", "default": false },
-        { "id": "maplemono-variable", "name": "MapleMono-Variable", "description": "上游原始文件名", "assetPattern": "^MapleMono-Variable\\.zip$", "default": false },
-        { "id": "maplemono-woff2", "name": "MapleMono-Woff2", "description": "上游原始文件名", "assetPattern": "^MapleMono-Woff2\\.zip$", "default": false },
-        { "id": "maplemononl-cn-unhinted", "name": "MapleMonoNL-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-CN-unhinted\\.zip$", "default": false },
-        { "id": "maplemononl-cn", "name": "MapleMonoNL-CN", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-CN\\.zip$", "default": false },
-        { "id": "maplemononl-nf-cn-unhinted", "name": "MapleMonoNL-NF-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-NF-CN-unhinted\\.zip$", "default": false },
-        { "id": "maplemononl-nf-cn", "name": "MapleMonoNL-NF-CN", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-NF-CN\\.zip$", "default": false },
-        { "id": "maplemononl-nf-unhinted", "name": "MapleMonoNL-NF-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-NF-unhinted\\.zip$", "default": false },
-        { "id": "maplemononl-nf", "name": "MapleMonoNL-NF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-NF\\.zip$", "default": false },
-        { "id": "maplemononl-otf", "name": "MapleMonoNL-OTF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-OTF\\.zip$", "default": false },
-        { "id": "maplemononl-ttf-autohint", "name": "MapleMonoNL-TTF-AutoHint", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-TTF-AutoHint\\.zip$", "default": false },
-        { "id": "maplemononl-ttf", "name": "MapleMonoNL-TTF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-TTF\\.zip$", "default": false },
-        { "id": "maplemononl-variable", "name": "MapleMonoNL-Variable", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-Variable\\.zip$", "default": false },
-        { "id": "maplemononl-woff2", "name": "MapleMonoNL-Woff2", "description": "上游原始文件名", "assetPattern": "^MapleMonoNL-Woff2\\.zip$", "default": false },
-        { "id": "maplemononormal-cn-unhinted", "name": "MapleMonoNormal-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-CN-unhinted\\.zip$", "default": false },
-        { "id": "maplemononormal-cn", "name": "MapleMonoNormal-CN", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-CN\\.zip$", "default": false },
-        { "id": "maplemononormal-nf-cn-unhinted", "name": "MapleMonoNormal-NF-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-NF-CN-unhinted\\.zip$", "default": false },
-        { "id": "maplemononormal-nf-cn", "name": "MapleMonoNormal-NF-CN", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-NF-CN\\.zip$", "default": false },
-        { "id": "maplemononormal-nf-unhinted", "name": "MapleMonoNormal-NF-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-NF-unhinted\\.zip$", "default": false },
-        { "id": "maplemononormal-nf", "name": "MapleMonoNormal-NF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-NF\\.zip$", "default": false },
-        { "id": "maplemononormal-otf", "name": "MapleMonoNormal-OTF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-OTF\\.zip$", "default": false },
-        { "id": "maplemononormal-ttf-autohint", "name": "MapleMonoNormal-TTF-AutoHint", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-TTF-AutoHint\\.zip$", "default": false },
-        { "id": "maplemononormal-ttf", "name": "MapleMonoNormal-TTF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-TTF\\.zip$", "default": false },
-        { "id": "maplemononormal-variable", "name": "MapleMonoNormal-Variable", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-Variable\\.zip$", "default": false },
-        { "id": "maplemononormal-woff2", "name": "MapleMonoNormal-Woff2", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormal-Woff2\\.zip$", "default": false },
-        { "id": "maplemononormalnl-cn-unhinted", "name": "MapleMonoNormalNL-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-CN-unhinted\\.zip$", "default": false },
-        { "id": "maplemononormalnl-cn", "name": "MapleMonoNormalNL-CN", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-CN\\.zip$", "default": false },
-        { "id": "maplemononormalnl-nf-cn-unhinted", "name": "MapleMonoNormalNL-NF-CN-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-NF-CN-unhinted\\.zip$", "default": false },
-        { "id": "maplemononormalnl-nf-cn", "name": "MapleMonoNormalNL-NF-CN", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-NF-CN\\.zip$", "default": false },
-        { "id": "maplemononormalnl-nf-unhinted", "name": "MapleMonoNormalNL-NF-unhinted", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-NF-unhinted\\.zip$", "default": false },
-        { "id": "maplemononormalnl-nf", "name": "MapleMonoNormalNL-NF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-NF\\.zip$", "default": false },
-        { "id": "maplemononormalnl-otf", "name": "MapleMonoNormalNL-OTF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-OTF\\.zip$", "default": false },
-        { "id": "maplemononormalnl-ttf-autohint", "name": "MapleMonoNormalNL-TTF-AutoHint", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-TTF-AutoHint\\.zip$", "default": false },
-        { "id": "maplemononormalnl-ttf", "name": "MapleMonoNormalNL-TTF", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-TTF\\.zip$", "default": false },
-        { "id": "maplemononormalnl-variable", "name": "MapleMonoNormalNL-Variable", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-Variable\\.zip$", "default": false },
-        { "id": "maplemononormalnl-woff2", "name": "MapleMonoNormalNL-Woff2", "description": "上游原始文件名", "assetPattern": "^MapleMonoNormalNL-Woff2\\.zip$", "default": false }
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
       ],
-      "platforms": ["windows", "macos", "linux"]
+      "variants": [
+        {
+          "id": "maplemono-cn-unhinted",
+          "name": "MapleMono-CN-unhinted",
+          "description": "",
+          "assetPattern": "^MapleMono-CN-unhinted\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemono-cn",
+          "name": "中文",
+          "description": "包含中文字符",
+          "assetPattern": "^MapleMono-CN\\.zip$",
+          "default": false,
+          "advanced": false,
+          "webOnly": false
+        },
+        {
+          "id": "maplemono-nf-cn-unhinted",
+          "name": "MapleMono-NF-CN-unhinted",
+          "description": "",
+          "assetPattern": "^MapleMono-NF-CN-unhinted\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemono-nf-cn",
+          "name": "中文 + Nerd Font",
+          "description": "包含中文字符及终端和编辑器图标",
+          "assetPattern": "^MapleMono-NF-CN\\.zip$",
+          "default": true,
+          "advanced": false,
+          "webOnly": false
+        },
+        {
+          "id": "maplemono-nf-unhinted",
+          "name": "MapleMono-NF-unhinted",
+          "description": "",
+          "assetPattern": "^MapleMono-NF-unhinted\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemono-nf",
+          "name": "Nerd Font",
+          "description": "包含终端和编辑器图标",
+          "assetPattern": "^MapleMono-NF\\.zip$",
+          "default": false,
+          "advanced": false,
+          "webOnly": false
+        },
+        {
+          "id": "maplemono-otf",
+          "name": "MapleMono-OTF",
+          "description": "",
+          "assetPattern": "^MapleMono-OTF\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemono-ttf-autohint",
+          "name": "MapleMono-TTF-AutoHint",
+          "description": "",
+          "assetPattern": "^MapleMono-TTF-AutoHint\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemono-ttf",
+          "name": "标准",
+          "description": "适合编辑器使用",
+          "assetPattern": "^MapleMono-TTF\\.zip$",
+          "default": false,
+          "advanced": false,
+          "webOnly": false
+        },
+        {
+          "id": "maplemono-variable",
+          "name": "MapleMono-Variable",
+          "description": "",
+          "assetPattern": "^MapleMono-Variable\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemono-woff2",
+          "name": "MapleMono-Woff2",
+          "description": "",
+          "assetPattern": "^MapleMono-Woff2\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": true
+        },
+        {
+          "id": "maplemononl-cn-unhinted",
+          "name": "MapleMonoNL-CN-unhinted",
+          "description": "",
+          "assetPattern": "^MapleMonoNL-CN-unhinted\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononl-cn",
+          "name": "MapleMonoNL-CN",
+          "description": "",
+          "assetPattern": "^MapleMonoNL-CN\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononl-nf-cn-unhinted",
+          "name": "MapleMonoNL-NF-CN-unhinted",
+          "description": "",
+          "assetPattern": "^MapleMonoNL-NF-CN-unhinted\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononl-nf-cn",
+          "name": "MapleMonoNL-NF-CN",
+          "description": "",
+          "assetPattern": "^MapleMonoNL-NF-CN\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononl-nf-unhinted",
+          "name": "MapleMonoNL-NF-unhinted",
+          "description": "",
+          "assetPattern": "^MapleMonoNL-NF-unhinted\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononl-nf",
+          "name": "MapleMonoNL-NF",
+          "description": "",
+          "assetPattern": "^MapleMonoNL-NF\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononl-otf",
+          "name": "MapleMonoNL-OTF",
+          "description": "",
+          "assetPattern": "^MapleMonoNL-OTF\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononl-ttf-autohint",
+          "name": "MapleMonoNL-TTF-AutoHint",
+          "description": "",
+          "assetPattern": "^MapleMonoNL-TTF-AutoHint\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononl-ttf",
+          "name": "MapleMonoNL-TTF",
+          "description": "",
+          "assetPattern": "^MapleMonoNL-TTF\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononl-variable",
+          "name": "MapleMonoNL-Variable",
+          "description": "",
+          "assetPattern": "^MapleMonoNL-Variable\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononl-woff2",
+          "name": "MapleMonoNL-Woff2",
+          "description": "",
+          "assetPattern": "^MapleMonoNL-Woff2\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": true
+        },
+        {
+          "id": "maplemononormal-cn-unhinted",
+          "name": "MapleMonoNormal-CN-unhinted",
+          "description": "",
+          "assetPattern": "^MapleMonoNormal-CN-unhinted\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormal-cn",
+          "name": "MapleMonoNormal-CN",
+          "description": "",
+          "assetPattern": "^MapleMonoNormal-CN\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormal-nf-cn-unhinted",
+          "name": "MapleMonoNormal-NF-CN-unhinted",
+          "description": "",
+          "assetPattern": "^MapleMonoNormal-NF-CN-unhinted\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormal-nf-cn",
+          "name": "MapleMonoNormal-NF-CN",
+          "description": "",
+          "assetPattern": "^MapleMonoNormal-NF-CN\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormal-nf-unhinted",
+          "name": "MapleMonoNormal-NF-unhinted",
+          "description": "",
+          "assetPattern": "^MapleMonoNormal-NF-unhinted\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormal-nf",
+          "name": "MapleMonoNormal-NF",
+          "description": "",
+          "assetPattern": "^MapleMonoNormal-NF\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormal-otf",
+          "name": "MapleMonoNormal-OTF",
+          "description": "",
+          "assetPattern": "^MapleMonoNormal-OTF\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormal-ttf-autohint",
+          "name": "MapleMonoNormal-TTF-AutoHint",
+          "description": "",
+          "assetPattern": "^MapleMonoNormal-TTF-AutoHint\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormal-ttf",
+          "name": "MapleMonoNormal-TTF",
+          "description": "",
+          "assetPattern": "^MapleMonoNormal-TTF\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormal-variable",
+          "name": "MapleMonoNormal-Variable",
+          "description": "",
+          "assetPattern": "^MapleMonoNormal-Variable\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormal-woff2",
+          "name": "MapleMonoNormal-Woff2",
+          "description": "",
+          "assetPattern": "^MapleMonoNormal-Woff2\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": true
+        },
+        {
+          "id": "maplemononormalnl-cn-unhinted",
+          "name": "MapleMonoNormalNL-CN-unhinted",
+          "description": "",
+          "assetPattern": "^MapleMonoNormalNL-CN-unhinted\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormalnl-cn",
+          "name": "MapleMonoNormalNL-CN",
+          "description": "",
+          "assetPattern": "^MapleMonoNormalNL-CN\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormalnl-nf-cn-unhinted",
+          "name": "MapleMonoNormalNL-NF-CN-unhinted",
+          "description": "",
+          "assetPattern": "^MapleMonoNormalNL-NF-CN-unhinted\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormalnl-nf-cn",
+          "name": "MapleMonoNormalNL-NF-CN",
+          "description": "",
+          "assetPattern": "^MapleMonoNormalNL-NF-CN\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormalnl-nf-unhinted",
+          "name": "MapleMonoNormalNL-NF-unhinted",
+          "description": "",
+          "assetPattern": "^MapleMonoNormalNL-NF-unhinted\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormalnl-nf",
+          "name": "MapleMonoNormalNL-NF",
+          "description": "",
+          "assetPattern": "^MapleMonoNormalNL-NF\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormalnl-otf",
+          "name": "MapleMonoNormalNL-OTF",
+          "description": "",
+          "assetPattern": "^MapleMonoNormalNL-OTF\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormalnl-ttf-autohint",
+          "name": "MapleMonoNormalNL-TTF-AutoHint",
+          "description": "",
+          "assetPattern": "^MapleMonoNormalNL-TTF-AutoHint\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormalnl-ttf",
+          "name": "MapleMonoNormalNL-TTF",
+          "description": "",
+          "assetPattern": "^MapleMonoNormalNL-TTF\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormalnl-variable",
+          "name": "MapleMonoNormalNL-Variable",
+          "description": "",
+          "assetPattern": "^MapleMonoNormalNL-Variable\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": false
+        },
+        {
+          "id": "maplemononormalnl-woff2",
+          "name": "MapleMonoNormalNL-Woff2",
+          "description": "",
+          "assetPattern": "^MapleMonoNormalNL-Woff2\\.zip$",
+          "default": false,
+          "advanced": true,
+          "webOnly": true
+        }
+      ]
     },
     {
       "id": "zhuque-fangsong",
@@ -108,7 +464,11 @@
           "default": true
         }
       ],
-      "platforms": ["windows", "macos", "linux"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ]
     },
     {
       "id": "lxgw-wenkai",
@@ -140,17 +500,31 @@
           "name": "文楷",
           "description": "比例字体，包含完整字重。",
           "assetPattern": "^lxgw-wenkai-v?[0-9.]+\\.zip$",
-          "default": true
+          "default": true,
+          "archiveMembers": [
+            "LXGWWenKai-Light.ttf",
+            "LXGWWenKai-Regular.ttf",
+            "LXGWWenKai-Medium.ttf"
+          ]
         },
         {
           "id": "mono",
           "name": "文楷 Mono",
           "description": "等宽版本的三个 TTF 文件。",
-          "assetPattern": "^LXGWWenKaiMono-Regular\\.ttf$",
-          "default": false
+          "assetPattern": "^lxgw-wenkai-v?[0-9.]+\\.zip$",
+          "default": false,
+          "archiveMembers": [
+            "LXGWWenKaiMono-Light.ttf",
+            "LXGWWenKaiMono-Regular.ttf",
+            "LXGWWenKaiMono-Medium.ttf"
+          ]
         }
       ],
-      "platforms": ["windows", "macos", "linux"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ]
     },
     {
       "id": "sarasa-gothic",
@@ -179,27 +553,31 @@
       "variants": [
         {
           "id": "mono-sc",
-          "name": "Mono SC",
+          "name": "Mono SC · 编辑器",
           "description": "简体中文等宽 TTF。",
           "assetPattern": "^SarasaMonoSC-TTF-[0-9.]+\\.7z$",
           "default": true
         },
         {
           "id": "gothic-sc",
-          "name": "Gothic SC",
+          "name": "Gothic SC · 正文",
           "description": "简体中文比例 TTF。",
           "assetPattern": "^SarasaGothicSC-TTF-[0-9.]+\\.7z$",
           "default": false
         },
         {
           "id": "term-sc",
-          "name": "Term SC",
+          "name": "Term SC · 终端",
           "description": "简体中文终端 TTF。",
           "assetPattern": "^SarasaTermSC-TTF-[0-9.]+\\.7z$",
           "default": false
         }
       ],
-      "platforms": ["windows", "macos", "linux"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ]
     },
     {
       "id": "smiley-sans",
@@ -234,7 +612,11 @@
           "default": true
         }
       ],
-      "platforms": ["windows", "macos", "linux"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ]
     },
     {
       "id": "source-han-serif",
@@ -260,23 +642,28 @@
       },
       "deliveryPolicy": "autoInstall",
       "versionPolicy": {},
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
       "variants": [
         {
           "id": "cn",
-          "name": "简体中文 CN",
-          "description": "面向简体中文的完整字重包。",
+          "name": "简体中文静态版",
+          "description": "中国大陆字形的静态 OTF",
           "assetPattern": "^[0-9]+_SourceHanSerifCN\\.zip$",
           "default": true
         },
         {
           "id": "variable",
           "name": "可变字体",
-          "description": "Source Han Serif Variable Font。",
+          "description": "上游完整可变字体包，下载量较大",
           "assetPattern": "^[0-9]+_SourceHanSerif-VF\\.zip$",
-          "default": false
+          "default": false,
+          "advanced": true
         }
-      ],
-      "platforms": ["windows", "macos", "linux"]
+      ]
     },
     {
       "id": "source-han-sans",
@@ -302,23 +689,28 @@
       },
       "deliveryPolicy": "autoInstall",
       "versionPolicy": {},
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ],
       "variants": [
         {
           "id": "cn",
-          "name": "简体中文 CN",
-          "description": "面向简体中文的完整字重包。",
+          "name": "简体中文静态版",
+          "description": "中国大陆字形的静态 OTF",
           "assetPattern": "^[0-9]+_SourceHanSansCN\\.zip$",
           "default": true
         },
         {
           "id": "variable",
           "name": "可变字体",
-          "description": "Source Han Sans Variable Font。",
+          "description": "上游完整可变字体包，下载量较大",
           "assetPattern": "^[0-9]+_SourceHanSans-VF\\.zip$",
-          "default": false
+          "default": false,
+          "advanced": true
         }
-      ],
-      "platforms": ["windows", "macos", "linux"]
+      ]
     },
     {
       "id": "font-awesome-pro",
@@ -341,7 +733,11 @@
       "deliveryPolicy": "notifyOnly",
       "versionPolicy": {},
       "variants": [],
-      "platforms": ["windows", "macos", "linux"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ]
     },
     {
       "id": "mi-sans",
@@ -364,7 +760,11 @@
       "deliveryPolicy": "notifyOnly",
       "versionPolicy": {},
       "variants": [],
-      "platforms": ["windows", "macos", "linux"]
+      "platforms": [
+        "windows",
+        "macos",
+        "linux"
+      ]
     }
   ]
 }
