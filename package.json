@@ -15,18 +15,18 @@
     "tauri:build": "tauri build --config apps/fontferry/src-tauri/tauri.conf.json"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
-    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "@playwright/test": "^1.65.0",
+    "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tauri-apps/api": "^2.12.4",
-    "@tauri-apps/cli": "^2.8.0",
+    "@tauri-apps/cli": "^2.12.4",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/svelte": "^5.2.8",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.6.6",
     "jsdom": "^30.0.1",
-    "svelte": "^5.56.10",
-    "svelte-check": "^4.7.6",
+    "svelte": "^5.57.3",
+    "svelte-check": "^4.7.8",
     "typescript": "^5.9.2",
-    "vite": "^8.2.2",
+    "vite": "^8.3.8",
     "vitest": "^4.1.11"
   }
 }
