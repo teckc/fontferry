@@ -2,6 +2,10 @@
 
 ## v0.2.0-alpha.8 字体包选择
 
+已发布测试版。三平台构建和 updater 签名通过。Windows 标准用户实包验证了 Maple Mono 非默认包、霞鹜文楷 Mono 三字重及保留受管字体的升级。
+
+[发行页](https://github.com/teckc/fontferry/releases/tag/v0.2.0-alpha.8) · [发布流水线](https://github.com/teckc/fontferry/actions/runs/45417271796) · [Windows 原生验收](https://github.com/teckc/fontferry/actions/runs/45417271796/job/138539890324)
+
 - 首次安装时，单包字体直接进入预览。多包字体显示推荐和高级选项。Maple Mono 的 WOFF2 只提供官方入口。
 - 霞鹜文楷的比例与等宽规格声明各自三个字重，共用同一个发布附件。预览显示文件名，系统注册前检查包内文件是否齐全和唯一。
 - 字体更新按已安装规格判定。新版附件缺失或匹配歧义时暂停更新，保留安装记录。

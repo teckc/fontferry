@@ -4,10 +4,10 @@
 
 ## 下载
 
-目前提供 **v0.2.0-alpha.7 测试版**。
+目前提供 **v0.2.0-alpha.8 测试版**。
 
-- [Windows x64 安装包](https://github.com/teckc/fontferry/releases/download/v0.2.0-alpha.7/FontFerry_0.2.0-alpha.7_x64-setup.exe)
-- [macOS、Linux 下载与发行说明](https://github.com/teckc/fontferry/releases/tag/v0.2.0-alpha.7)
+- [Windows x64 安装包](https://github.com/teckc/fontferry/releases/download/v0.2.0-alpha.8/FontFerry_0.2.0-alpha.8_x64-setup.exe)
+- [macOS、Linux 下载与发行说明](https://github.com/teckc/fontferry/releases/tag/v0.2.0-alpha.8)
 
 ## 快速开始
 
