@@ -26,6 +26,14 @@ struct ArtifactDownload {
     include_all: bool,
 }
 
+impl ArtifactDownload {
+    fn include_variant(&mut self, variant: &fontferry_core::Variant) {
+        self.include_all |= variant.archive_members.is_empty();
+        self.required_members
+            .extend_from_slice(&variant.archive_members);
+    }
+}
+
 #[async_trait]
 impl ArtifactSource for HttpClient {
     async fn download(
@@ -53,10 +61,7 @@ impl ArtifactSource for HttpClient {
                             })
                         }
                     };
-                    download.include_all |= variant.archive_members.is_empty();
-                    download
-                        .required_members
-                        .extend_from_slice(&variant.archive_members);
+                    download.include_variant(variant);
                 }
             }
             ArtifactProvider::DirectUrl { url } => {
@@ -65,15 +70,20 @@ impl ArtifactSource for HttpClient {
                     .and_then(Iterator::last)
                     .filter(|name| !name.is_empty())
                     .unwrap_or("font-download");
-                assets.insert(
-                    name.to_owned(),
-                    ArtifactDownload {
-                        url: url.clone(),
-                        digest: None,
-                        required_members: Vec::new(),
-                        include_all: true,
-                    },
-                );
+                let mut download = ArtifactDownload {
+                    url: url.clone(),
+                    digest: None,
+                    required_members: Vec::new(),
+                    include_all: variant_ids.is_empty(),
+                };
+                for variant in font
+                    .variants
+                    .iter()
+                    .filter(|variant| variant_ids.contains(&variant.id))
+                {
+                    download.include_variant(variant);
+                }
+                assets.insert(name.to_owned(), download);
             }
         }
 
