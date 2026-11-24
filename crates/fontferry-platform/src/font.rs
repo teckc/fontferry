@@ -164,10 +164,16 @@ fn extract_zip(source: &Path, destination: &Path, budget: &mut ExtractionBudget)
                 "archive contains a symbolic link".into(),
             ));
         }
-        let enclosed = entry.enclosed_name().ok_or_else(|| {
-            FontFerryError::ArchiveRejected("archive entry escapes destination".into())
-        })?;
-        let target = safe_target(destination, &enclosed)?;
+        // Validate the archive spelling before ZIP normalizes separators to the host format.
+        let name = entry
+            .name()
+            .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
+        let target = safe_target(destination, Path::new(name.as_ref()))?;
+        if entry.enclosed_name().is_none() {
+            return Err(FontFerryError::ArchiveRejected(
+                "archive entry escapes destination".into(),
+            ));
+        }
         if entry.is_dir() {
             fs::create_dir_all(&target)
                 .map_err(|error| FontFerryError::ArchiveRejected(error.to_string()))?;
@@ -410,6 +416,29 @@ mod tests {
                 &mut ExtractionBudget::new(1024, 10)
             )
             .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn extracts_zip_with_nested_font_paths() -> std::result::Result<(), Box<dyn std::error::Error>>
+    {
+        let temporary = tempdir()?;
+        let archive_path = temporary.path().join("font.zip");
+        let mut archive = ZipWriter::new(File::create(&archive_path)?);
+        archive.add_directory("release/fonts/", SimpleFileOptions::default())?;
+        archive.start_file("release/fonts/font.ttf", SimpleFileOptions::default())?;
+        archive.write_all(b"font bytes")?;
+        archive.finish()?;
+        let destination = temporary.path().join("out");
+        extract_zip(
+            &archive_path,
+            &destination,
+            &mut ExtractionBudget::new(1024, 10),
+        )?;
+        assert_eq!(
+            fs::read(destination.join("release/fonts/font.ttf"))?,
+            b"font bytes"
         );
         Ok(())
     }
